@@ -1,0 +1,27 @@
+package wippy:pdf2image;
+
+world pdf2image {
+    record render-error {
+        code: u8,
+        message: string,
+    }
+
+    record scaling-options {
+        dpi: f32,
+        scale: f32,
+    }
+
+    record output-options {
+        format: string,
+        quality: u32,
+        background: string,
+    }
+
+    record render-options {
+        scaling: scaling-options,
+        output: output-options,
+    }
+
+    export pages: func(blob: list<u8>) -> result<u32, render-error>;
+    export render: func(blob: list<u8>, pages: list<u32>, options: render-options) -> result<list<list<u8>>, render-error>;
+}

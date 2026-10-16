@@ -1,0 +1,16 @@
+package kickside:html2pdf;
+
+world html2pdf {
+    record render-options {
+        page-size: string,
+        landscape: bool,
+        margin-mm: f32,
+    }
+
+    record render-error {
+        code: u8,
+        message: string,
+    }
+
+    export render: func(html: string, options: render-options) -> result<list<u8>, render-error>;
+}

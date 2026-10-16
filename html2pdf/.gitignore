@@ -1,0 +1,13 @@
+wippy
+.wippy/
+.env
+.DS_Store
+dist/
+out/
+component/build/
+component/gen/
+component/target/
+component/third_party/
+component/full.wat
+__pycache__/
+*.pyc

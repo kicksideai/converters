@@ -1,0 +1,8 @@
+version: "1.0"
+namespace: app.deps
+
+entries:
+  - name: test
+    kind: ns.dependency
+    component: wippy/test
+    version: '>=v0.0.8'

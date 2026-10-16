@@ -1,0 +1,31 @@
+organization: kickside
+module: doc2md
+description: Convert PDF, Office, legacy Office, or RTF input into Markdown, with optional image extraction
+license: MIT
+repository: https://github.com/kicksideai/converters
+homepage: https://wippy.ai
+keywords:
+  - markdown
+  - pdf
+  - docx
+  - doc
+  - xls
+  - ppt
+  - rtf
+  - wasm
+  - document
+embed:
+  - kickside.convert.doc2md:assets
+exclude_meta:
+  type:
+    - test
+    - test_helper
+    - test_support
+exclude:
+  - "app:**"
+  - "app.env:**"
+  - "app.deps:**"
+  - "test/**"
+  - "tests/**"
+  - "test-support/**"
+  - "app.**:**"

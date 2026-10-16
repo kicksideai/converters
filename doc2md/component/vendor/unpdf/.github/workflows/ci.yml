@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version-check:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify all package versions match
+        shell: bash
+        run: |
+          # Extract version strings from the four canonical files listed in
+          # CLAUDE.md's "Version Bump Checklist". CI fails fast when any are
+          # out of sync — a full release can't ship mismatched versions.
+          root=$(grep -m1 '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          cli=$(grep -m1 '^version = ' cli/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          wasm=$(grep -m1 '^version = ' unpdf-wasm/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          py=$(grep -m1 '^version = ' bindings/python/pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+          cs=$(grep -oE '<Version>[^<]+</Version>' bindings/csharp/Unpdf/Unpdf.csproj | head -1 | sed 's/<[^>]*>//g')
+
+          echo "Root Cargo.toml:                    $root"
+          echo "cli/Cargo.toml:                     $cli"
+          echo "unpdf-wasm/Cargo.toml:              $wasm"
+          echo "bindings/python/pyproject.toml:     $py"
+          echo "bindings/csharp/Unpdf/Unpdf.csproj: $cs"
+
+          # Also verify the workspace's CLI dep on unpdf points at the same
+          # version so consumers of the published crate aren't broken.
+          dep=$(grep -m1 'unpdf = { version =' cli/Cargo.toml | sed 's/.*version = "\([^"]*\)".*/\1/')
+          echo "cli -> unpdf dep version:           $dep"
+          wasm_dep=$(grep -m1 'unpdf = { version =' unpdf-wasm/Cargo.toml | sed 's/.*version = "\([^"]*\)".*/\1/')
+          echo "unpdf-wasm -> unpdf dep version:    $wasm_dep"
+
+          fail=0
+          for v in "$cli" "$wasm" "$py" "$cs" "$dep" "$wasm_dep"; do
+            if [ "$v" != "$root" ]; then
+              fail=1
+            fi
+          done
+
+          if [ $fail -eq 1 ]; then
+            echo "::error::Version mismatch — update all canonical files AND unpdf-wasm/Cargo.toml per CLAUDE.md Version Bump Checklist."
+            exit 1
+          fi
+          echo "All versions match: $root"
+
+  build:
+    name: Build and Test
+    needs: version-check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --release --all-features
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-features -- -D warnings
+
+  # Build FFI library
+  build-ffi:
+    name: Build FFI Library
+    needs: version-check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            lib: libunpdf.so
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            lib: libunpdf.so
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            lib: unpdf.dll
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            lib: libunpdf.dylib
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl-tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Set RUSTFLAGS for musl
+        if: contains(matrix.target, 'musl')
+        run: echo "RUSTFLAGS=-C target-feature=-crt-static" >> $GITHUB_ENV
+
+      - name: Build FFI library
+        run: cargo build --release --features ffi --target ${{ matrix.target }}
+
+  build-wasm:
+    name: Build WASM
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM (bundler)
+        run: wasm-pack build unpdf-wasm --target bundler
+
+      - name: Build WASM (nodejs)
+        run: wasm-pack build unpdf-wasm --target nodejs --out-dir pkg-node
+
+      - name: Run WASM tests
+        run: wasm-pack test --node unpdf-wasm
+

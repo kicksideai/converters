@@ -1,0 +1,80 @@
+version: "1.0"
+namespace: kickside.convert.html2pdf
+
+entries:
+  - name: definition
+    kind: ns.definition
+    readme: file://README.md
+    meta:
+      title: HTML to PDF
+      description: Render an HTML string (or URL) into a PDF document using an embedded litehtml + libharu WebAssembly component.
+
+  - name: assets
+    kind: fs.directory
+    meta:
+      comment: Filesystem holding the html2pdf WebAssembly component.
+    directory: ./src/html2pdf/assets
+
+  - name: render
+    kind: function.wasm
+    meta:
+      comment: Rust-free C/C++ WebAssembly component method rendering HTML to PDF bytes.
+    fs: kickside.convert.html2pdf:assets
+    path: html2pdf.wasm
+    hash: sha256:31ea3bb4d98c1a03dbea6078185f29e0ae4b234c1ebc82104d03dcdc00bf4057
+    method: render
+    imports:
+      - wasi:io
+      - wasi:cli
+      - wasi:clocks
+      - wasi:filesystem
+    pool:
+      type: inline
+    # Per-call kill deadline for a hung whole-document HTML to PDF render.
+    # Overridable per deploy like pool settings.
+    limits:
+      max_execution_ms: 90000
+
+  - name: html2pdf
+    kind: library.lua
+    meta:
+      comment: Public API. Returns a table exposing render(request[, options]) and new(runtime?); request is { html = <string> } or { url = <http(s) URL> }; options sets page_size, landscape and margin_mm. Returns the PDF as a binary string. Errors expose native message(), kind(), retryable() and details().code.
+    source: file://html2pdf.lua
+    modules:
+      - http_client
+      - funcs
+
+  - name: smoke_test
+    kind: function.lua
+    meta:
+      type: test
+      suite: html2pdf.smoke
+      description: Sanity check that the test harness and module load.
+    source: file://smoke_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+
+  - name: render_test
+    kind: function.lua
+    meta:
+      type: test
+      suite: html2pdf.render
+      description: End-to-end render tests producing valid PDF bytes from HTML across options and error paths.
+    source: file://render_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+      html2pdf: kickside.convert.html2pdf:html2pdf
+
+
+
+
+  - name: native_errors_test
+    kind: function.lua
+    meta: {type: test, suite: html2pdf.native_errors}
+    source: file://native_errors_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+      converter: kickside.convert.html2pdf:html2pdf

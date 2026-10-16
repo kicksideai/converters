@@ -1,0 +1,169 @@
+diff --git a/src/encodings.cpp b/src/encodings.cpp
+index 7046ede..5ebaa46 100644
+--- a/src/encodings.cpp
++++ b/src/encodings.cpp
+@@ -1699,23 +1699,19 @@ bool end_condition(int index)
+ 	return index >= 1024;
+ }
+ 
+-struct abort_prescan_exception : public std::exception
+-{
+-	const char* what() const noexcept override { return "abort prescan"; }
+-};
+-
+-void increment(int& index, const string& str)
++bool increment(int& index, const string& str)
+ {
+ 	index++;
+ 	if (index >= (int)str.size() || end_condition(index))
+-		throw abort_prescan_exception(); // abort prescan
++		return false; // abort prescan
++	return true;
+ }
+ 
+ // https://html.spec.whatwg.org/multipage/parsing.html#concept-get-attributes-when-sniffing
+-bool prescan_get_attribute(const string& str, inout int& index, out string& name, out string& value)
++bool prescan_get_attribute(const string& str, inout int& index, out string& name, out string& value, out bool& aborted)
+ {
+ 	// 1.
+-	while (is_whitespace(str[index]) || str[index] == '/') increment(index, str);
++	while (is_whitespace(str[index]) || str[index] == '/') { if (!increment(index, str)) { aborted = true; return false; } }
+ 
+ 	// 2.
+ 	if (str[index] == '>') return false;
+@@ -1727,7 +1723,7 @@ bool prescan_get_attribute(const string& str, inout int& index, out string& name
+ step_4:
+ 	if (str[index] == '=' && name != "")
+ 	{
+-		increment(index, str);
++		if (!increment(index, str)) { aborted = true; return false; }
+ 		goto process_value;
+ 	}
+ 	else if (is_whitespace(str[index]))
+@@ -1738,23 +1734,23 @@ step_4:
+ 		name += (char)lowcase(str[index]);
+ 
+ 	// 5.
+-	increment(index, str);
++	if (!increment(index, str)) { aborted = true; return false; }
+ 	goto step_4;
+ 
+ 	// 6.
+ spaces:
+-	while (is_whitespace(str[index])) increment(index, str);
++	while (is_whitespace(str[index])) { if (!increment(index, str)) { aborted = true; return false; } }
+ 
+ 	// 7.
+ 	if (str[index] != '=')
+ 		return true;
+ 
+ 	// 8.
+-	increment(index, str); // skip '='
++	if (!increment(index, str)) { aborted = true; return false; } // skip '='
+ 
+ 	// 9.
+ process_value:
+-	while (is_whitespace(str[index])) increment(index, str);
++	while (is_whitespace(str[index])) { if (!increment(index, str)) { aborted = true; return false; } }
+ 
+ 	// 10.
+ 	if (str[index] == '"' || str[index] == '\'')
+@@ -1764,12 +1760,12 @@ process_value:
+ 
+ 		// 2.
+ 	quote_loop:
+-		increment(index, str);
++		if (!increment(index, str)) { aborted = true; return false; }
+ 
+ 		// 3.
+ 		if (str[index] == b)
+ 		{
+-			increment(index, str);
++			if (!increment(index, str)) { aborted = true; return false; }
+ 			return true;
+ 		}
+ 
+@@ -1793,7 +1789,7 @@ step_11:
+ 		value += (char)lowcase(str[index]);
+ 
+ 	// 12.
+-	increment(index, str);
++	if (!increment(index, str)) { aborted = true; return false; }
+ 	goto step_11;
+ }
+ 
+@@ -1814,7 +1810,7 @@ loop:
+ 	{
+ 		index = (int)str.find("-->", index);
+ 		if(index == -1 || end_condition(index))
+-			throw abort_prescan_exception(); // abort prescan
++			return encoding::null; // abort prescan
+ 		index += 2; // not 3 because it will be incremented one more time in step 5 (next_byte)
+ 	}
+ 	else if (match_i(str, index, "<meta") && (is_whitespace(str[index + 5]) || str[index + 5] == '/'))
+@@ -1831,8 +1827,14 @@ loop:
+ 		// 6.
+ 	attributes:
+ 		string attr_name, attr_value;
+-		if (!prescan_get_attribute(str, index, attr_name, attr_value))
+-			goto processing;
++		{
++			bool attr_aborted = false;
++			if (!prescan_get_attribute(str, index, attr_name, attr_value, attr_aborted))
++			{
++				if (attr_aborted) return encoding::null; // abort prescan
++				goto processing;
++			}
++		}
+ 
+ 		// 7. If the attribute's name is already in attribute list, then return to the step labeled attributes.
+ 		if (contains(attribute_list, attr_name))
+@@ -1896,23 +1898,27 @@ loop:
+ 		// 1.
+ 		index = (int)str.find_first_of(" \t\r\n\f>", index);
+ 		if(index == -1 || end_condition(index))
+-			throw abort_prescan_exception(); // abort prescan
++			return encoding::null; // abort prescan
+ 
+ 		// 2.
+ 		string tmp;
+-		while (prescan_get_attribute(str, index, tmp, tmp)) {}
++		{
++			bool attr_aborted = false;
++			while (prescan_get_attribute(str, index, tmp, tmp, attr_aborted)) {}
++			if (attr_aborted) return encoding::null; // abort prescan
++		}
+ 		goto next_byte;
+ 	}
+ 	else if (str[index] == '<' && is_one_of(str[index + 1], '!', '/', '?'))
+ 	{
+ 		index = (int)str.find('>', index);
+ 		if(index == -1 || end_condition(index))
+-			throw abort_prescan_exception(); // abort prescan
++			return encoding::null; // abort prescan
+ 	}
+ 
+ 	// 5.
+ next_byte:
+-	increment(index, str);
++	if (!increment(index, str)) return encoding::null; // abort prescan
+ 	goto loop;
+ }
+ 
+@@ -1984,13 +1990,10 @@ encoding get_xml_encoding(const string& str)
+ // https://html.spec.whatwg.org/multipage/parsing.html#prescan-a-byte-stream-to-determine-its-encoding
+ encoding prescan_for_encoding(const string& str)
+ {
+-	try {
+-		return prescan_a_byte_stream_to_determine_its_encoding(str);
+-	}
+-	catch(abort_prescan_exception&)
+-	{
++	encoding result = prescan_a_byte_stream_to_determine_its_encoding(str);
++	if (result == encoding::null)
+ 		return get_xml_encoding(str);
+-	}
++	return result;
+ }
+ 
+ // https://html.spec.whatwg.org/multipage/parsing.html#encoding-sniffing-algorithm

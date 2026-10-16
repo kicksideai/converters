@@ -1,0 +1,88 @@
+version: "1.0"
+namespace: app.env
+
+entries:
+  - name: file
+    kind: env.storage.file
+    auto_create: true
+    file_path: .env
+    lifecycle:
+      auto_start: true
+
+  - name: os
+    kind: env.storage.os
+    lifecycle:
+      auto_start: true
+
+  - name: store
+    kind: env.storage.router
+    lifecycle:
+      auto_start: true
+    storages:
+      - app.env:file
+      - app.env:os
+
+  - name: doc2md_fixtures
+    kind: library.lua
+    meta:
+      comment: Test-only sample document bytes for Doc2MD. Excluded from published package by wippy.yaml.
+    source: file://doc2md_fixtures.lua
+    modules:
+      - base64
+
+  - name: doc2md_smoke_test
+    kind: function.lua
+    meta:
+      type: test
+      suite: doc2md.smoke
+      description: Sanity check that the test harness and SDK module load.
+    source: file://doc2md_smoke_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+
+  - name: doc2md_convert_test
+    kind: function.lua
+    meta:
+      type: test
+      suite: doc2md.convert
+      description: End-to-end conversion tests across PDF, Office, URL, options, and error paths.
+    source: file://doc2md_convert_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+      doc2md: kickside.convert.doc2md:doc2md
+      fixtures: app.env:doc2md_fixtures
+
+  - name: doc2md_load_off
+    kind: process.lua
+    meta:
+      comment: Excluded local load test for Doc2MD with image extraction disabled.
+    source: file://doc2md_load_test.lua
+    method: run_off
+    modules:
+      - time
+    imports:
+      doc2md: kickside.convert.doc2md:doc2md
+      fixtures: app.env:doc2md_fixtures
+
+  - name: doc2md_load_on
+    kind: process.lua
+    meta:
+      comment: Excluded local load test for Doc2MD with image extraction enabled.
+    source: file://doc2md_load_test.lua
+    method: run_on
+    modules:
+      - time
+    imports:
+      doc2md: kickside.convert.doc2md:doc2md
+      fixtures: app.env:doc2md_fixtures
+
+  - name: native_errors_test
+    kind: function.lua
+    meta: {type: test, suite: doc2md.native_errors}
+    source: file://native_errors_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+      converter: kickside.convert.doc2md:doc2md

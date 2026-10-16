@@ -1,0 +1,84 @@
+{
+  "repository": "converters",
+  "checks": [],
+  "modules": {
+    "doc2md": {
+      "path": "doc2md",
+      "organization": "kickside",
+      "module": "doc2md",
+      "type": "library",
+      "visibility": "public",
+      "embed": [
+        "kickside.convert.doc2md:assets"
+      ],
+      "targets": [
+        "help",
+        "wippy",
+        "build-component",
+        "fixtures",
+        "install",
+        "lint",
+        "test",
+        "load-test",
+        "publish-dry-run",
+        "publish",
+        "check",
+        "clean"
+      ],
+      "harness": ".",
+      "profiles": [],
+      "pg_database": null,
+      "extra_tests": []
+    },
+    "html2pdf": {
+      "path": "html2pdf",
+      "organization": "kickside",
+      "module": "html2pdf",
+      "type": "library",
+      "visibility": "public",
+      "embed": [
+        "kickside.convert.html2pdf:assets"
+      ],
+      "targets": [
+        "help",
+        "image",
+        "build-component",
+        "wippy",
+        "install",
+        "lint",
+        "test",
+        "check",
+        "clean"
+      ],
+      "harness": ".",
+      "profiles": [],
+      "pg_database": null,
+      "extra_tests": []
+    },
+    "pdf2image": {
+      "path": "pdf2image",
+      "organization": "kickside",
+      "module": "pdf2image",
+      "type": "library",
+      "visibility": "public",
+      "embed": [
+        "kickside.convert.pdf2image:assets"
+      ],
+      "targets": [
+        "help",
+        "wippy",
+        "build-component",
+        "fixtures",
+        "install",
+        "lint",
+        "test",
+        "check",
+        "clean"
+      ],
+      "harness": ".",
+      "profiles": [],
+      "pg_database": null,
+      "extra_tests": []
+    }
+  }
+}

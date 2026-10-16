@@ -1,0 +1,8 @@
+wippy
+.wippy/
+.env
+.DS_Store
+dist/
+component/target/
+component/mutants.out/
+component/mutants.out.old/

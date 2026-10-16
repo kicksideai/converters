@@ -1,0 +1,29 @@
+[package]
+name = "doc2md"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "WebAssembly component that converts documents to Markdown with optional image extraction"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.58"
+png = "0.18"
+# Vendored unpdf 0.7.0: FontStatistics.analyze breaks HashMap count ties by
+# choosing the smaller font so heading detection is deterministic. See vendor/unpdf.
+unpdf = { path = "vendor/unpdf" }
+undoc = "0.5"
+cfb = "0.14"
+calamine = { version = "0.26", default-features = false, features = ["picture"] }
+rtf-parser = { version = "0.4", default-features = false }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+emf-core = { git = "https://github.com/mythrnr/emf-rs", tag = "0.0.9", default-features = false, features = ["svg"] }
+wmf-core = { git = "https://github.com/mythrnr/wmf-rs", tag = "0.0.25", default-features = false, features = ["svg"] }
+
+[profile.release]
+opt-level = "s"
+strip = true
+lto = true

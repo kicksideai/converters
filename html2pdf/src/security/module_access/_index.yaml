@@ -1,0 +1,47 @@
+version: '1.0'
+namespace: kickside.convert.html2pdf.security
+entries:
+- name: module_access
+  kind: security.policy
+  meta:
+    title: Html2Pdf
+    surface: kickside.convert.html2pdf
+    intent: module_access
+    includes:
+    - kickside.convert.html2pdf.security:module_runtime
+  groups: []
+  policy:
+    resources:
+    - kickside.convert.html2pdf:*
+    - kickside.convert.html2pdf.security:*
+    actions:
+    - registry.get
+    - registry.find
+    - contract.get
+    - contract.open
+    - contract.call
+    - contract.implementations
+    - contract.security
+    - funcs.call
+    - funcs.security
+    effect: allow
+- name: module_runtime
+  kind: security.policy
+  meta:
+    private: true
+  groups: []
+  policy:
+    resources:
+    - kickside.convert.html2pdf:*
+    - kickside.convert.html2pdf.security:*
+    actions:
+    - registry.get
+    - registry.find
+    - contract.get
+    - contract.open
+    - contract.call
+    - contract.implementations
+    - contract.security
+    - funcs.call
+    - funcs.security
+    effect: allow

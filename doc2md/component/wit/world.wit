@@ -1,0 +1,41 @@
+package kickside:doc2md;
+
+world converter {
+    record image {
+        name: string,
+        data: list<u8>,
+    }
+
+    record conversion-options {
+        extract-images: bool,
+    }
+
+    record conversion-request {
+        bytes: list<u8>,
+        options: conversion-options,
+    }
+
+    record converted-document {
+        markdown: string,
+        images: list<image>,
+    }
+
+    record conversion-error {
+        code: u8,
+        message: string,
+    }
+
+    // Per-page text/image accounting, used to decide which pages need OCR: a page
+    // with little or no extractable text but image resources is a scanned page.
+    record page-info {
+        page: u32,
+        text-len: u32,
+        image-count: u32,
+    }
+
+    export convert: func(request: conversion-request) -> result<converted-document, conversion-error>;
+
+    // Returns one entry per page with its extracted-text length and image-resource
+    // count. PDFs report real pages; other formats report a single logical page.
+    export page-resources: func(bytes: list<u8>) -> result<list<page-info>, conversion-error>;
+}

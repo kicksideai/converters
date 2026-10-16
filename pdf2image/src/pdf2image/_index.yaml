@@ -1,0 +1,135 @@
+version: "1.0"
+namespace: kickside.convert.pdf2image
+
+entries:
+  - name: definition
+    kind: ns.definition
+    readme: file://README.md
+    meta:
+      title: PDF to Image
+      description: Render a PDF, supplied as a URL or a binary blob, into per-page images. Supports scale or DPI, PNG/JPEG/WEBP output, and a configurable background. Exposes the page count, a single-page renderer, and a batch renderer.
+
+  - name: assets
+    kind: fs.directory
+    meta:
+      comment: Filesystem holding the pdf2image WebAssembly component.
+    directory: ./src/pdf2image/assets
+
+  - name: pages
+    kind: function.wasm
+    meta:
+      comment: Rust WebAssembly component method returning the page count of a PDF.
+    fs: kickside.convert.pdf2image:assets
+    path: pdf2image.wasm
+    hash: sha256:fbf18fc0fe4735a50fd73c68274be1bc381bccfa078a893e6ad5a4c5e5214fe0
+    method: pages
+    imports:
+      - wasi:io
+      - wasi:cli
+      - wasi:random
+    # Bounded concurrency: max_size caps simultaneous instances. Override per deploy
+    # with -o kickside.convert.pdf2image:pages:pool.max_size=N or an app override.
+    pool:
+      type: lazy
+      max_size: 4
+    # Per-call kill deadline for a hung page-count; this is a metadata-only call.
+    # Overridable per deploy like pool.max_size.
+    limits:
+      max_execution_ms: 15000
+
+  - name: render
+    kind: function.wasm
+    meta:
+      comment: Rust WebAssembly component method rendering selected PDF pages to PNG, JPEG, or WEBP images.
+    fs: kickside.convert.pdf2image:assets
+    path: pdf2image.wasm
+    hash: sha256:fbf18fc0fe4735a50fd73c68274be1bc381bccfa078a893e6ad5a4c5e5214fe0
+    method: render
+    imports:
+      - wasi:io
+      - wasi:cli
+      - wasi:random
+    # Bounded concurrency: max_size caps simultaneous renders. Override per deploy
+    # with -o kickside.convert.pdf2image:render:pool.max_size=N or an app override.
+    pool:
+      type: lazy
+      max_size: 4
+    # Per-call kill deadline for a hung render; each call is one page batch.
+    # Overridable per deploy like pool.max_size.
+    limits:
+      max_execution_ms: 45000
+
+  - name: pdf2image
+    kind: library.lua
+    meta:
+      comment: Public API. Returns a table exposing open(request) and new(runtime?); request is { bytes = <binary string> } or { url = <http(s) URL> }. The handle exposes .pages, .to_image(page[, opts]), and .render(opts). Errors expose native message(), kind(), retryable() and details().code.
+    source: file://pdf2image.lua
+    modules:
+      - http_client
+      - funcs
+
+  - name: rasterize
+    kind: function.lua
+    meta:
+      comment: convert.rasterizer adapter; resolves a content pointer (storage volume+path, url, or bytes) and renders pages to images.
+    source: file://rasterize_adapter.lua
+    method: run
+    modules: [fs]
+    imports:
+      pdf2image: kickside.convert.pdf2image:pdf2image
+
+  - name: capability
+    kind: registry.entry
+    meta:
+      name: PDF Rasterizer
+      type: convert.rasterizer
+      comment: Advertises that PDF sources can be rendered to page images via pdf2image.
+    input_mime_types:
+      - application/pdf
+    processor_func: kickside.convert.pdf2image:rasterize
+    priority: 100
+
+  - name: smoke_test
+    kind: function.lua
+    meta:
+      type: test
+      suite: pdf2image.smoke
+      description: Sanity check that the test harness and module load.
+    source: file://smoke_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+
+  - name: render_test
+    kind: function.lua
+    meta:
+      type: test
+      suite: pdf2image.render
+      # Cold-starts two lazily-pooled 3.8 MB wasm functions before rendering, which
+      # does not fit the harness default of 30s.
+      timeout: 120s
+      description: End-to-end render tests across page count, per-page PNG, URL, and error paths.
+    source: file://render_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+      pdf2image: kickside.convert.pdf2image:pdf2image
+      fixtures: kickside.convert.pdf2image:fixtures
+
+  - name: fixtures
+    kind: library.lua
+    meta:
+      type: test_helper
+      comment: Base64-encoded sample PDFs used by the render tests.
+    source: file://fixtures.lua
+    modules:
+      - base64
+
+  - name: native_errors_test
+    kind: function.lua
+    meta: {type: test, suite: pdf2image.native_errors}
+    source: file://native_errors_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+      converter: kickside.convert.pdf2image:pdf2image

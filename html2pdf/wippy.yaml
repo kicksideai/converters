@@ -1,0 +1,26 @@
+organization: kickside
+module: html2pdf
+description: Render an HTML string (or URL) into a PDF document
+license: MIT
+repository: https://github.com/kicksideai/converters
+keywords:
+  - html
+  - pdf
+  - render
+  - litehtml
+  - wasm
+embed:
+  - kickside.convert.html2pdf:assets
+exclude:
+  - "app:**"
+  - "app.env:**"
+  - "app.deps:**"
+  - "test/**"
+  - "tests/**"
+  - "test-support/**"
+  - "app.**:**"
+exclude_meta:
+  type:
+    - test
+    - test_helper
+    - test_support

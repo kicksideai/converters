@@ -1,0 +1,148 @@
+diff --git a/src/hpdf_font_cid.c b/src/hpdf_font_cid.c
+index 0b76a36..0d4ca1e 100644
+--- a/src/hpdf_font_cid.c
++++ b/src/hpdf_font_cid.c
+@@ -64,6 +64,11 @@ CreateCMap  (HPDF_Encoder   encoder,
+              HPDF_Xref      xref);
+ 
+ 
++static HPDF_Dict
++CreateToUnicodeCMap  (HPDF_Encoder   encoder,
++                      HPDF_Xref      xref);
++
++
+ static void
+ OnFree_Func  (HPDF_Dict  obj);
+ 
+@@ -149,7 +154,7 @@ HPDF_Type0Font_New  (HPDF_MMgr        mmgr,
+ 	 */
+         if (HPDF_StrCmp(encoder_attr->ordering, "Identity-H") == 0) {
+ 	    ret += HPDF_Dict_AddName (font, "Encoding", "Identity-H");
+-	    attr->cmap_stream = CreateCMap (encoder, xref);
++	    attr->cmap_stream = CreateToUnicodeCMap (encoder, xref);
+ 
+ 	    if (attr->cmap_stream) {
+ 	        ret += HPDF_Dict_Add (font, "ToUnicode", attr->cmap_stream);
+@@ -865,6 +870,122 @@ CidRangeToHex  (char        *s,
+     return pbuf;
+ }
+ 
++/*
++ * The encoding CMap that CreateCMap emits is a CID mapping (CMapType 1,
++ * begincidrange) and is not a valid /ToUnicode CMap, so spec-compliant text
++ * extractors recover no text from Identity-H UTF fonts. Under the UTF
++ * encoder every two-byte code equals the BMP Unicode code point, so a valid
++ * /ToUnicode is the identity map. A bfrange entry may vary only its low byte,
++ * hence the 256 ranges below, split into the 100-entry blocks the CMap spec
++ * mandates.
++ */
++static HPDF_Dict
++CreateToUnicodeCMap  (HPDF_Encoder   encoder,
++                      HPDF_Xref      xref)
++{
++    HPDF_STATUS ret = HPDF_OK;
++    HPDF_Dict cmap = HPDF_DictStream_New (encoder->mmgr, xref);
++    char buf[HPDF_TMP_BUF_SIZ];
++    char *pbuf;
++    char *eptr = buf + HPDF_TMP_BUF_SIZ - 1;
++    HPDF_UINT i;
++    HPDF_UINT phase, odd;
++    HPDF_Dict sysinfo;
++
++    if (!cmap)
++        return NULL;
++
++    ret += HPDF_Dict_AddName (cmap, "Type", "CMap");
++    ret += HPDF_Dict_AddName (cmap, "CMapName", "Adobe-Identity-UCS");
++
++    sysinfo = HPDF_Dict_New (encoder->mmgr);
++    if (!sysinfo)
++        return NULL;
++
++    if (HPDF_Dict_Add (cmap, "CIDSystemInfo", sysinfo) != HPDF_OK)
++        return NULL;
++
++    ret += HPDF_Dict_Add (sysinfo, "Registry",
++                HPDF_String_New (encoder->mmgr, "Adobe", NULL));
++    ret += HPDF_Dict_Add (sysinfo, "Ordering",
++                HPDF_String_New (encoder->mmgr, "UCS", NULL));
++    ret += HPDF_Dict_AddNumber (sysinfo, "Supplement", 0);
++
++    ret += HPDF_Stream_WriteStr (cmap->stream,
++                "/CIDInit /ProcSet findresource begin\r\n\r\n");
++    ret += HPDF_Stream_WriteStr (cmap->stream, "12 dict begin\r\n\r\n");
++    ret += HPDF_Stream_WriteStr (cmap->stream, "begincmap\r\n\r\n");
++    ret += HPDF_Stream_WriteStr (cmap->stream,
++                "/CIDSystemInfo 3 dict dup begin\r\n"
++                "  /Registry (Adobe) def\r\n"
++                "  /Ordering (UCS) def\r\n"
++                "  /Supplement 0 def\r\n"
++                "end def\r\n\r\n");
++    ret += HPDF_Stream_WriteStr (cmap->stream,
++                "/CMapName /Adobe-Identity-UCS def\r\n");
++    ret += HPDF_Stream_WriteStr (cmap->stream, "/CMapType 2 def\r\n\r\n");
++    ret += HPDF_Stream_WriteStr (cmap->stream, "1 begincodespacerange\r\n");
++    ret += HPDF_Stream_WriteStr (cmap->stream, "<0000> <ffff>\r\n");
++    ret += HPDF_Stream_WriteStr (cmap->stream, "endcodespacerange\r\n\r\n");
++
++    if (ret != HPDF_OK)
++        return NULL;
++
++    phase = 256 / 100;
++    odd = 256 % 100;
++    if (phase > 0)
++        pbuf = HPDF_IToA (buf, 100, eptr);
++    else
++        pbuf = HPDF_IToA (buf, odd, eptr);
++    HPDF_StrCpy (pbuf, " beginbfrange\r\n", eptr);
++    ret += HPDF_Stream_WriteStr (cmap->stream, buf);
++
++    for (i = 0; i < 256; i++) {
++        HPDF_UINT16 from = (HPDF_UINT16)(i << 8);
++        HPDF_UINT16 to = (HPDF_UINT16)((i << 8) | 0xFF);
++
++        pbuf = UINT16ToHex (buf, from, eptr, 2);
++        *pbuf++ = ' ';
++        pbuf = UINT16ToHex (pbuf, to, eptr, 2);
++        *pbuf++ = ' ';
++        pbuf = UINT16ToHex (pbuf, from, eptr, 2);
++        HPDF_StrCpy (pbuf, "\r\n", eptr);
++        ret += HPDF_Stream_WriteStr (cmap->stream, buf);
++
++        if ((i + 1) % 100 == 0) {
++            phase--;
++            pbuf = (char *)HPDF_StrCpy (buf, "endbfrange\r\n\r\n", eptr);
++
++            if (phase > 0)
++                pbuf = HPDF_IToA (pbuf, 100, eptr);
++            else
++                pbuf = HPDF_IToA (pbuf, odd, eptr);
++
++            HPDF_StrCpy (pbuf, " beginbfrange\r\n", eptr);
++            ret += HPDF_Stream_WriteStr (cmap->stream, buf);
++        }
++
++        if (ret != HPDF_OK)
++            return NULL;
++    }
++
++    pbuf = buf;
++    if (odd > 0)
++        pbuf = (char *)HPDF_StrCpy (pbuf, "endbfrange\r\n", eptr);
++
++    pbuf = (char *)HPDF_StrCpy (pbuf, "endcmap\r\n", eptr);
++    pbuf = (char *)HPDF_StrCpy (pbuf, "CMapName currentdict /CMap "
++            "defineresource pop\r\n", eptr);
++    pbuf = (char *)HPDF_StrCpy (pbuf, "end\r\n", eptr);
++    HPDF_StrCpy (pbuf, "end\r\n", eptr);
++    ret += HPDF_Stream_WriteStr (cmap->stream, buf);
++
++    if (ret != HPDF_OK)
++        return NULL;
++
++    return cmap;
++}
++
+ static HPDF_Dict
+ CreateCMap  (HPDF_Encoder   encoder,
+              HPDF_Xref      xref)

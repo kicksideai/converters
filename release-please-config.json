@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-component-in-tag": true,
+  "separate-pull-requests": false,
+  "bump-minor-pre-major": true,
+  "last-release-sha": "c7ca7f7468d4ea2678b65843bab07db6061f3c16",
+  "packages": {
+    "doc2md": {
+      "component": "doc2md",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "html2pdf": {
+      "component": "html2pdf",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "pdf2image": {
+      "component": "pdf2image",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "dxf2md": {
+      "component": "dxf2md",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}
