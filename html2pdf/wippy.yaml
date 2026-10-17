@@ -1,6 +1,6 @@
 organization: kickside
 module: html2pdf
-description: Render an HTML string (or URL) into a PDF document
+description: Renders an HTML string or URL into a PDF document
 license: MIT
 repository: https://github.com/kicksideai/converters
 keywords:
