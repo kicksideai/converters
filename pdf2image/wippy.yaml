@@ -1,6 +1,6 @@
 organization: kickside
 module: pdf2image
-description: Render a PDF — from a URL or a binary blob — into per-page PNG, JPEG, or WEBP images
+description: Renders a PDF from a URL or a binary blob into per-page PNG, JPEG, or WEBP images
 license: MIT
 repository: https://github.com/kicksideai/converters
 keywords:
