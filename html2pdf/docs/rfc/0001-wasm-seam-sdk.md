@@ -1,6 +1,6 @@
 # RFC 0001 — WASM-Seam SDK Convention for Document Converters
 
-- Status: Proposed
+- Status: Implemented
 - Applies to: `pdf2image`, `html2pdf`, `doc2md` (and future WASM-backed Lua SDK modules)
 - Reference implementation: `pdf2image`
 
@@ -146,7 +146,7 @@ Every failure returns `nil, err` with a native runtime error. Read
 ## Security and robustness hardening (at the seam)
 
 - **Fetch timeout** via `http_client.get(url, { timeout = "30s" })`.
-- **Max download / input size** of 32 MiB, enforced by `max_response_body` and a
+- **Max download / input size** of 128 MiB, enforced by `max_response_body` and a
   post-check, and again on raw `bytes`/`html` before marshaling (base64 inflates
   memory ~33% and is held alongside the blob).
 - **Scheme allow-list** (`http`/`https` only) as a pre-flight string check, plus a
@@ -181,19 +181,14 @@ A conforming module:
 | `html2pdf` | `render` | `html` \| `url` | `page_size`/`landscape`/`margin_mm` |
 | `doc2md` | `convert` | `bytes` \| `url` | `extract_images` |
 
-All four implement the seam and the contract above. The `new`-based tests cover
+All three implement the seam and the contract above. The `new`-based tests cover
 the `(nil, nil)` result, transport failure, component error passthrough, invalid
 base64, and degenerate output for each module.
 
-## Drawbacks and alternatives
+## Compatibility
 
-- **Breaking change.** Bare-function exports and string errors are gone; callers
-  must adopt `.open(...)` / `.render(...)` / `.convert(...)` and `err:details().code`.
-  Mitigated by `__tostring`/`__concat` and module version bumps.
-- **Replication over a shared library.** The helpers are duplicated per module to
-  keep each self-contained and independently publishable; a shared module was
-  rejected to avoid a cross-module dependency. A consistency check (diffing the
-  helper blocks) compensates.
-- **Kind inference by call site.** Without a component-side `kind`, classification
-  is coarse. Acceptable today; revisitable via the optional component change noted
-  above.
+The published SDK exports named methods and `new(runtime)`. Keep these exports,
+request keys, options, result shapes, and native error codes stable for callers.
+New options remain optional and preserve existing behavior when omitted.
+The owning module tests transport failures, missing or malformed WASM results,
+component errors, binary decoding, and option bounds through the injection seam.

@@ -36,7 +36,7 @@ To rebuild WASM, install Docker for the checked-in wasi-sdk toolchain. Make and 
 From this module directory:
 
 ```sh
-make install
+make lockrefresh
 make lint
 make test
 ```
@@ -44,6 +44,19 @@ make test
 `make build-component` rebuilds and stages the WASM asset and its registry hash.
 Run the converter suite against hosts using each database engine when changing
 host integration. The converter suite itself has no SQL dialect matrix.
+
+## Lua API
+
+Import `kickside.convert.html2pdf:html2pdf` and call `render({html = text})`
+or `render({url = url})`. The result is a binary PDF string. The engine emits
+one page and clips content beyond it; it does not execute JavaScript.
+
+Check the returned `err` before using a result. The linked API reference owns
+options, bounds, error classifications, and format limits.
+
+## Reference
+
+- [Module reference](src/html2pdf/README.md)
 
 ## Links
 

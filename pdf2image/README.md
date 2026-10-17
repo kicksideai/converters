@@ -34,7 +34,7 @@ To rebuild WASM, install Rust with `wasm32-wasip2`. Make and Python 3 support bu
 From this module directory:
 
 ```sh
-make install
+make lockrefresh
 make lint
 make test
 ```
@@ -42,6 +42,19 @@ make test
 `make build-component` rebuilds and stages the WASM asset and its registry hash.
 Run the converter suite against hosts using each database engine when changing
 host integration. The converter suite itself has no SQL dialect matrix.
+
+## Lua API
+
+Import `kickside.convert.pdf2image:pdf2image` and call `open({bytes = data})`
+or `open({url = url})`. The handle exposes `pages`, `to_image(page, options)`,
+and `render(options)`. Images are binary strings in the selected output format.
+
+Check the returned `err` before using a result. The linked API reference owns
+options, bounds, error classifications, and format limits.
+
+## Reference
+
+- [Module reference](src/pdf2image/README.md)
 
 ## Links
 
