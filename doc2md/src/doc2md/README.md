@@ -120,7 +120,7 @@ Run from the module root, with the installed CLI linked as in CI:
 
 ```bash
 ln -sf "$(command -v wippy)" wippy
-make install
+make lockrefresh
 make build-component
 make lint
 make test
@@ -139,14 +139,9 @@ Validate the exact publish path without uploading:
 make publish-dry-run
 ```
 
-Publish as a Wippy library module:
-
-```bash
-make publish
-```
-
-Those targets call `wippy publish` with `--module-type library` so first-time
-registration does not create the module as an application.
+The dry-run target validates `--module-type library`. Reviewed releases use
+the repository’s GitHub Release Please workflow; direct `make publish` is
+disabled.
 
 ## License
 

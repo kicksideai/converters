@@ -34,7 +34,7 @@ To rebuild WASM, install Rust with `wasm32-wasip2`. Make and Python 3 support bu
 From this module directory:
 
 ```sh
-make install
+make lockrefresh
 make lint
 make test
 ```
@@ -42,6 +42,19 @@ make test
 `make build-component` rebuilds and stages the WASM asset and its registry hash.
 Run the converter suite against hosts using each database engine when changing
 host integration. The converter suite itself has no SQL dialect matrix.
+
+## Lua API
+
+Import `kickside.convert.doc2md:doc2md` and call `convert({bytes = data})` or
+`convert({url = url})`. The result contains `markdown` and an `images` array;
+image extraction is opt-in through the second options argument.
+
+Check the returned `err` before using a result. The linked API reference owns
+options, bounds, error classifications, and format limits.
+
+## Reference
+
+- [Module reference](src/doc2md/README.md)
 
 ## Links
 
