@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.14 (2026-10-17)
+
+- Build the component with portable compiler source paths and refresh packaged documentation.
+
 ## 0.8.11 (2026-10-08)
 
 - Add selectable module access policies and native scope tests (fcef4be)

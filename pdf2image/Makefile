@@ -29,7 +29,7 @@ wippy:
 
 build-component:
 	rustup target add wasm32-wasip2
-	cd component && cargo build --release --target wasm32-wasip2
+	cd component && RUSTFLAGS="$(RUSTFLAGS) --remap-path-prefix=$(CURDIR)=/source --remap-path-prefix=$(or $(CARGO_HOME),$(HOME)/.cargo)=/cargo" cargo build --release --target wasm32-wasip2
 	@mkdir -p $(dir $(WASM_DST))
 	cp $(WASM_SRC) $(WASM_DST)
 	@HASH=$$(shasum -a 256 $(WASM_DST) | cut -d' ' -f1); \
