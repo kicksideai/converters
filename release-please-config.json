@@ -4,6 +4,7 @@
   "include-component-in-tag": true,
   "separate-pull-requests": false,
   "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
   "bootstrap-sha": "faeea9290eb969a75b2cf03065430648f4fa6be2",
   "packages": {
     "doc2md": {
