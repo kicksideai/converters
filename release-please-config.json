@@ -4,7 +4,8 @@
   "include-component-in-tag": true,
   "separate-pull-requests": false,
   "bump-minor-pre-major": true,
-  "last-release-sha": "c7ca7f7468d4ea2678b65843bab07db6061f3c16",
+  "bump-patch-for-minor-pre-major": true,
+  "bootstrap-sha": "faeea9290eb969a75b2cf03065430648f4fa6be2",
   "packages": {
     "doc2md": {
       "component": "doc2md",
@@ -16,10 +17,6 @@
     },
     "pdf2image": {
       "component": "pdf2image",
-      "changelog-path": "CHANGELOG.md"
-    },
-    "dxf2md": {
-      "component": "dxf2md",
       "changelog-path": "CHANGELOG.md"
     }
   }
