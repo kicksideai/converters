@@ -44,12 +44,14 @@ enum Format {
 #[derive(Debug, Clone, Copy)]
 struct Settings {
     extract_images: bool,
+    page_markers: bool,
 }
 
 impl From<ConversionOptions> for Settings {
     fn from(options: ConversionOptions) -> Self {
         Self {
             extract_images: options.extract_images,
+            page_markers: options.page_markers,
         }
     }
 }
@@ -231,8 +233,14 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
     let options = unpdf::ParseOptions::new().with_resources(settings.extract_images);
     let doc = unpdf::parse_bytes_with_options(blob, options)
         .map_err(|e| fail(ERR_PARSE, e.to_string()))?;
-    let mut markdown = unpdf::render::to_markdown(&doc, &unpdf::RenderOptions::default())
-        .map_err(|e| fail(ERR_RENDER, e.to_string()))?;
+    let marker_style = if settings.page_markers {
+        unpdf::PageMarkerStyle::Comment
+    } else {
+        unpdf::PageMarkerStyle::None
+    };
+    let render = unpdf::RenderOptions::default().with_page_markers(marker_style);
+    let mut markdown =
+        unpdf::render::to_markdown(&doc, &render).map_err(|e| fail(ERR_RENDER, e.to_string()))?;
 
     if !settings.extract_images {
         return Ok(types::Converted {
@@ -345,8 +353,18 @@ fn convert_office(
     }
     let markdown = match spreadsheet {
         Some(markdown) => markdown,
-        None => undoc::render::to_markdown(&doc, &undoc::render::RenderOptions::default())
-            .map_err(|e| fail(ERR_RENDER, e.to_string()))?,
+        None => undoc::render::to_markdown(
+            &doc,
+            &undoc::render::RenderOptions {
+                section_markers: if settings.page_markers {
+                    undoc::render::SectionMarkerStyle::Comment
+                } else {
+                    undoc::render::SectionMarkerStyle::None
+                },
+                ..undoc::render::RenderOptions::default()
+            },
+        )
+        .map_err(|e| fail(ERR_RENDER, e.to_string()))?,
     };
 
     if !settings.extract_images {
@@ -536,6 +554,7 @@ fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError
         bytes,
         Settings {
             extract_images: true,
+            page_markers: false,
         },
         &mut budget,
     )?;
@@ -596,13 +615,19 @@ mod tests {
     }
 
     fn settings(extract_images: bool) -> Settings {
-        Settings { extract_images }
+        Settings {
+            extract_images,
+            page_markers: false,
+        }
     }
 
     fn request(bytes: &[u8], extract_images: bool) -> ConversionRequest {
         ConversionRequest {
             bytes: bytes.to_vec(),
-            options: ConversionOptions { extract_images },
+            options: ConversionOptions {
+                extract_images,
+                page_markers: false,
+            },
         }
     }
 
@@ -1123,5 +1148,71 @@ mod tests {
         )
         .unwrap();
         assert!(pptx.markdown.contains("Hello from PPTX"));
+    }
+
+    fn located(extract_images: bool) -> Settings {
+        Settings {
+            extract_images,
+            page_markers: true,
+        }
+    }
+
+    #[test]
+    fn convert_pdf_marks_each_page_when_page_markers_are_requested() {
+        let doc =
+            convert_pdf(include_bytes!("../tests/assets/sample.pdf"), located(false)).unwrap();
+        assert!(
+            doc.markdown.starts_with("<!-- page 1 -->"),
+            "{}",
+            doc.markdown
+        );
+        assert!(doc.markdown.contains("Hello from PDF"));
+    }
+
+    #[test]
+    fn convert_pdf_keeps_page_markers_when_images_are_linked() {
+        let doc = convert_pdf(include_bytes!("../tests/assets/sample.pdf"), located(true)).unwrap();
+        assert!(doc.markdown.contains("<!-- page 1 -->"), "{}", doc.markdown);
+    }
+
+    #[test]
+    fn convert_pdf_emits_no_page_markers_by_default() {
+        let doc = convert_pdf(
+            include_bytes!("../tests/assets/sample.pdf"),
+            settings(false),
+        )
+        .unwrap();
+        assert!(!doc.markdown.contains("<!-- page"), "{}", doc.markdown);
+    }
+
+    #[test]
+    fn convert_office_marks_each_slide_when_page_markers_are_requested() {
+        let pptx = convert_office(
+            include_bytes!("../tests/assets/pptx.pptx"),
+            located(false),
+            &mut Budget::root(),
+        )
+        .unwrap();
+        assert!(pptx.markdown.contains("<!-- slide 1"), "{}", pptx.markdown);
+        let plain = convert_office(
+            include_bytes!("../tests/assets/pptx.pptx"),
+            settings(false),
+            &mut Budget::root(),
+        )
+        .unwrap();
+        assert!(!plain.markdown.contains("<!-- slide"), "{}", plain.markdown);
+    }
+
+    #[test]
+    fn exported_convert_honours_the_page_markers_option() {
+        let doc = <Component as Guest>::convert(ConversionRequest {
+            bytes: include_bytes!("../tests/assets/sample.pdf").to_vec(),
+            options: ConversionOptions {
+                extract_images: false,
+                page_markers: true,
+            },
+        })
+        .unwrap();
+        assert!(doc.markdown.contains("<!-- page 1 -->"), "{}", doc.markdown);
     }
 }

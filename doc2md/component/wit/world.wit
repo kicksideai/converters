@@ -8,6 +8,9 @@ world converter {
 
     record conversion-options {
         extract-images: bool,
+        // Inserts hidden HTML comments at each PDF page (`<!-- page N -->`) and
+        // PPTX slide (`<!-- slide N: Name -->`) so readers can locate content.
+        page-markers: bool,
     }
 
     record conversion-request {

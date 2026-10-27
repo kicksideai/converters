@@ -5,6 +5,20 @@ type ConvertRequest = {
 
 type ConvertOptions = {
     extract_images: boolean?,
+    page_markers: boolean?,
+}
+
+type Settings = {
+    extract_images: boolean,
+    page_markers: boolean,
+}
+
+type Marker = {
+    kind: string,
+    number: integer,
+    name: string?,
+    start: integer,
+    finish: integer,
 }
 
 type Image = {
@@ -32,6 +46,7 @@ local ALLOWED_SCHEME = "^https?://"
 
 local OPTION_KEYS = {
     extract_images = true,
+    page_markers = true,
 }
 
 local function reject_unknown(options: { [string]: any }, allowed: { [string]: boolean }): string?
@@ -44,9 +59,9 @@ local function reject_unknown(options: { [string]: any }, allowed: { [string]: b
     return nil
 end
 
-local function normalize_options(options: ConvertOptions?): (boolean?, string?)
+local function normalize_options(options: ConvertOptions?): (Settings?, string?)
     if options == nil then
-        return false, nil
+        return { extract_images = false, page_markers = false }, nil
     end
 
     if type(options) ~= "table" then
@@ -58,11 +73,55 @@ local function normalize_options(options: ConvertOptions?): (boolean?, string?)
         return nil, unknown
     end
 
-    if options.extract_images ~= nil and type(options.extract_images) ~= "boolean" then
-        return nil, "extract_images must be a boolean when provided"
+    for _, key in ipairs({ "extract_images", "page_markers" }) do
+        if options[key] ~= nil and type(options[key]) ~= "boolean" then
+            return nil, key .. " must be a boolean when provided"
+        end
     end
 
-    return options.extract_images == true, nil
+    return { extract_images = options.extract_images == true, page_markers = options.page_markers == true }, nil
+end
+
+-- markers returns the hidden page and slide comments that convert inserts when
+-- page_markers is set, in document order. A marker occupies its own line:
+-- `<!-- page N -->` or `<!-- slide N -->` / `<!-- slide N: Name -->`.
+-- start and finish are byte offsets of the comment, so a reader can assign each
+-- piece of text to the last marker that precedes it.
+local function markers(markdown: string): { Marker }
+    local found: { Marker } = {}
+    local position = 1
+    local length = #markdown
+    while position <= length do
+        local line_end = markdown:find("\n", position, true) or (length + 1)
+        local line = markdown:sub(position, line_end - 1)
+        local page = line:match("^<!%-%- page (%d+) %-%->$")
+        if page ~= nil then
+            found[#found + 1] = { kind = "page", number = math.tointeger(tonumber(page)) :: integer, start = position, finish = line_end - 1 }
+        else
+            local slide, rest = line:match("^<!%-%- slide (%d+)(.-) %-%->$")
+            if slide ~= nil then
+                local name: string? = nil
+                if type(rest) == "string" then
+                    name = rest:match("^: (.+)$")
+                end
+                found[#found + 1] = { kind = "slide", number = math.tointeger(tonumber(slide)) :: integer, name = name, start = position, finish = line_end - 1 }
+            end
+        end
+        position = line_end + 1
+    end
+    return found
+end
+
+-- strip_markers removes marker lines so text can be embedded or displayed
+-- without them.
+local function strip_markers(text: string): string
+    local kept = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        if not (line:match("^<!%-%- page %d+ %-%->$") or line:match("^<!%-%- slide %d+.- %-%->$")) then
+            kept[#kept + 1] = line
+        end
+    end
+    return table.concat(kept, "\n")
 end
 
 local function normalize_images(images: any): (any, error?)
@@ -190,16 +249,17 @@ local function new(runtime: Runtime?): any
             return nil, src_err
         end
 
-        local extract_images, opt_err = normalize_options(options)
-        if opt_err ~= nil then
+        local settings, opt_err = normalize_options(options)
+        if opt_err ~= nil or settings == nil then
             return nil, (errors.new({kind = errors.INVALID, retryable = false,
-                message = PREFIX .. opt_err, details = {code = "invalid_input"}}) :: error)
+                message = PREFIX .. tostring(opt_err), details = {code = "invalid_input"}}) :: error)
         end
 
         local wasm_request = {
             bytes = blob,
             options = {
-                ["extract-images"] = extract_images == true,
+                ["extract-images"] = settings.extract_images,
+                ["page-markers"] = settings.page_markers,
             },
         }
 
@@ -290,6 +350,8 @@ local default = new()
 return {
     convert = default.convert,
     page_resources = default.page_resources,
+    markers = markers,
+    strip_markers = strip_markers,
     new = new,
     limits = { max_input_bytes = MAX_INPUT_BYTES },
 }
