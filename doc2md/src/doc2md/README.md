@@ -57,6 +57,10 @@ local document, err = doc2md.convert({ bytes = uploaded_bytes }, {
   - `url`: HTTP(S) URL to download.
 - **`options`** — an optional table (unknown keys are rejected):
   - `extract_images`: optional boolean, default `false`.
+  - `page_markers`: optional boolean, default `false`. Inserts a hidden HTML
+    comment on its own line where each PDF page (`<!-- page 3 -->`) and PPTX
+    slide (`<!-- slide 3: Pricing -->`) starts. Markdown viewers do not show
+    comments. Other formats carry no page boundaries and are unchanged.
 
 `doc2md.new(runtime)` builds an instance with injected runtime dependencies
 (`{ funcs?, http_client? }`) for tests or a custom HTTP client. See
@@ -74,6 +78,14 @@ Every failure returns `nil, err` with a native runtime error. Read
 | `download_failed` | `errors.UNAVAILABLE` | `true` |
 | `render_failed` | `errors.INTERNAL` | `false` |
 | `internal` | `errors.INTERNAL` | `true` |
+
+## Page and slide markers
+
+`doc2md.markers(markdown)` returns the markers in document order as
+`{ kind = "page" | "slide", number, name?, start, finish }`, where `start` and
+`finish` are byte offsets of the comment. Text belongs to the last marker that
+precedes it. `doc2md.strip_markers(text)` removes marker lines before text is
+embedded or displayed.
 
 ## Page resources
 
