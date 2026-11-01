@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.16](https://github.com/kicksideai/converters/compare/doc2md-v0.8.15...doc2md-v0.8.16) (2026-11-01)
+
+
+### Bug Fixes
+
+* **doc2md:** remove compiler sysroot paths from shipped component ([08cd224](https://github.com/kicksideai/converters/commit/08cd224120b3c54e523f7767f85ccc345786f818))
+
 ## [0.8.15](https://github.com/kicksideai/converters/compare/doc2md-v0.8.14...doc2md-v0.8.15) (2026-10-27)
 
 
