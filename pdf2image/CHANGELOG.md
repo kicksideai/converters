@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.14](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.13...pdf2image-v0.7.14) (2026-11-04)
+
+
+### Bug Fixes
+
+* **doc2md:** build the shipped component independently of installed rust-src ([57d2f84](https://github.com/kicksideai/converters/commit/57d2f8448bbf7778ebb5de54b29d6f8e024df601))
+
 ## 0.7.13 (2026-10-17)
 
 - Build the component with portable compiler source paths and refresh packaged documentation.

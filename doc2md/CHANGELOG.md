@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.17](https://github.com/kicksideai/converters/compare/doc2md-v0.8.16...doc2md-v0.8.17) (2026-11-04)
+
+
+### Bug Fixes
+
+* **doc2md:** build the shipped component independently of installed rust-src ([57d2f84](https://github.com/kicksideai/converters/commit/57d2f8448bbf7778ebb5de54b29d6f8e024df601))
+
 ## [0.8.16](https://github.com/kicksideai/converters/compare/doc2md-v0.8.15...doc2md-v0.8.16) (2026-11-01)
 
 
