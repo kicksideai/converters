@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: MIT
 local function pdf(image_counts: { integer }): string
     local objects = { "<< /Type /Catalog /Pages 2 0 R >>", "" }
     local function add(body: string): integer objects[#objects + 1] = body; return #objects end
