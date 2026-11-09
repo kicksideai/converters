@@ -46,6 +46,14 @@ local function define()
                 test.eq(#doc2md.markers(document.markdown), #counts)
             end
         end)
+        test.it("counts every image resource and Form before size filtering", function()
+            for _, form in ipairs({false, true}) do
+                local pages, err = doc2md.page_resources({bytes = pdf_pages.pdf({2,1}, form)})
+                test.is_nil(err)
+                test.eq(pages[1].image_count, form and 3 or 2)
+                test.eq(pages[2].image_count, form and 2 or 1)
+            end
+        end)
         test.it("preserves optional page identity through the Lua normalizer", function()
             local document, err = fake(function()
                 return {ok = {markdown = "", images = {{name = "scan.png", data = "bytes", page = 12}, {name = "figure.png", data = "bytes"}}}}, nil

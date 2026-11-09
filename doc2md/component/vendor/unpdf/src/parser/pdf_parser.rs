@@ -155,6 +155,7 @@ impl PdfParser {
 
     /// Convert a raw XObject into a model Resource.
     fn convert_xobject(xobj: RawXObject) -> Option<Resource> {
+        if xobj.subtype != "Image" { return None; }
         let mime_type = match xobj.filter.as_deref() {
             Some("DCTDecode") => "image/jpeg",
             Some("JPXDecode") => "image/jp2",
@@ -264,6 +265,7 @@ pub(crate) fn parse_single_page(
         let pages = backend.pages();
         if let Some(page_id) = pages.get(&page_num) {
             if let Ok(xobjects) = backend.page_xobjects(*page_id) {
+                page.image_resource_count = xobjects.len() as u32;
                 for xobj in xobjects {
                     let base_id = format!("page{}_{}", page_num, xobj.name);
                     if let Some(resource) = convert_xobject_pub(xobj) {
@@ -315,6 +317,7 @@ pub(crate) fn parse_single_page(
 /// Free-function version of `PdfParser::convert_xobject` so `parse_single_page`
 /// (and other `run_stream` consumers) can use it without needing `&self`.
 pub(crate) fn convert_xobject_pub(xobj: RawXObject) -> Option<Resource> {
+    if xobj.subtype != "Image" { return None; }
     let mime_type = match xobj.filter.as_deref() {
         Some("DCTDecode") => "image/jpeg",
         Some("JPXDecode") => "image/jp2",

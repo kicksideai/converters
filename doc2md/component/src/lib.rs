@@ -543,7 +543,7 @@ fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError
             out.push(PageInfo {
                 page: page.number,
                 text_len: text.trim().chars().count() as u32,
-                image_count: image_blocks.max(page.images.len() as u32),
+                image_count: image_blocks.max(page.images.len() as u32).max(page.image_resource_count),
             });
         }
         return Ok(out);

@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: MIT
-local function pdf(image_counts: { integer }): string
+local function pdf(image_counts: { integer }, form: boolean?): string
     local objects = { "<< /Type /Catalog /Pages 2 0 R >>", "" }
     local function add(body: string): integer objects[#objects + 1] = body; return #objects end
     local function stream(body: string, attributes: string): integer
@@ -14,6 +14,11 @@ local function pdf(image_counts: { integer }): string
             local image = index == 1 and shared or stream(string.rep(string.char(page), 16), "/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8")
             resources[#resources + 1] = "/" .. name .. " " .. image .. " 0 R"
             commands[#commands + 1] = "q 100 0 0 100 0 0 cm /" .. name .. " Do Q"
+        end
+        if form then
+            local nested = stream("q 100 0 0 100 100 100 cm /I Do Q", "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /XObject << /I " .. shared .. " 0 R >> >>")
+            resources[#resources + 1] = "/F " .. nested .. " 0 R"
+            commands[#commands + 1] = "/F Do"
         end
         local contents = stream(table.concat(commands, "\n"), "")
         local id = add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << " .. table.concat(resources, " ") .. " >> >> /Contents " .. contents .. " 0 R >>")

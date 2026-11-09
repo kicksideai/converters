@@ -26,6 +26,10 @@ pub struct Page {
     /// 가 페이지 파싱 직후 즉시 디스크로 flush 할 수 있도록 제공.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<(String, Resource)>,
+
+    /// Unfiltered image and Form resources; a Form may contain further images.
+    #[serde(default)]
+    pub image_resource_count: u32,
 }
 
 impl Page {
@@ -38,6 +42,7 @@ impl Page {
             elements: Vec::new(),
             rotation: 0,
             images: Vec::new(),
+            image_resource_count: 0,
         }
     }
 
