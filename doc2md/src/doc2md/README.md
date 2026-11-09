@@ -158,3 +158,5 @@ disabled.
 ## License
 
 [MIT License](../../LICENSE).
+
+PDF images carry an optional `page` number from the source PDF and appear in page order. Shared resources used on different pages return one image record per page association. Images from formats without PDF pages omit `page`. Image names and bytes retain their existing format.

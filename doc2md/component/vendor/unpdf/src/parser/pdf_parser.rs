@@ -100,7 +100,8 @@ impl PdfParser {
                         if let Ok(xobjects) = self.backend.page_xobjects(*page_id) {
                             for xobj in xobjects {
                                 let key = format!("page{}_{}", page.number, xobj.name);
-                                if let Some(r) = Self::convert_xobject(xobj) {
+                                if let Some(mut r) = Self::convert_xobject(xobj) {
+                                    r.page = Some(page.number);
                                     document.resources.insert(key, r);
                                 }
                             }
@@ -142,7 +143,8 @@ impl PdfParser {
             if let Ok(xobjects) = self.backend.page_xobjects(page_id) {
                 for xobj in xobjects {
                     let key = format!("page{}_{}", page_num, xobj.name);
-                    if let Some(resource) = Self::convert_xobject(xobj) {
+                    if let Some(mut resource) = Self::convert_xobject(xobj) {
+                        resource.page = Some(page_num);
                         resources.insert(key, resource);
                     }
                 }

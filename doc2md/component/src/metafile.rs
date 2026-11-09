@@ -169,6 +169,7 @@ mod tests {
     #[test]
     fn converts_zlib_compressed_emf_to_svg() {
         let mut imgs = vec![Image {
+            page: None,
             name: "image1.emf".into(),
             data: include_bytes!("../tests/assets/metafile.emf").to_vec(),
         }];
@@ -184,6 +185,7 @@ mod tests {
     #[test]
     fn non_metafile_images_are_left_untouched() {
         let mut imgs = vec![Image {
+            page: None,
             name: "photo.jpg".into(),
             data: vec![0xFF, 0xD8, 0xFF, 0xE0],
         }];

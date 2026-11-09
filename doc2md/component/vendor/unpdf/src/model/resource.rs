@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 /// An embedded resource in the document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resource {
+    /// PDF page containing this resource, when extracted from a page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
     /// Raw binary data
     #[serde(skip_serializing)]
     pub data: Vec<u8>,
@@ -35,6 +38,7 @@ impl Resource {
     /// Create a new resource.
     pub fn new(data: Vec<u8>, mime_type: impl Into<String>, resource_type: ResourceType) -> Self {
         Self {
+            page: None,
             data,
             mime_type: mime_type.into(),
             resource_type,

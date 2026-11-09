@@ -250,7 +250,7 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
     }
 
     let mut keys: Vec<&String> = doc.resources.keys().collect();
-    keys.sort();
+    keys.sort_by_key(|id| (doc.resources[*id].page, *id));
 
     let mut files: HashMap<String, (String, Vec<u8>)> = HashMap::new();
     let mut images: Vec<types::Image> = Vec::new();
@@ -262,7 +262,7 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
         let (bytes, ext) = pdf_image_file(resource);
         let name = format!("{}.{}", sanitize(id), ext);
         files.insert((*id).clone(), (name.clone(), bytes.clone()));
-        images.push(types::Image { name, data: bytes });
+        images.push(types::Image { name, data: bytes, page: resource.page });
     }
 
     let mut ordered: Vec<(String, String)> = Vec::new();
@@ -389,6 +389,7 @@ fn convert_office(
             .clone()
             .unwrap_or_else(|| format!("{}.{}", sanitize(id), ext));
         images.push(types::Image {
+            page: None,
             name,
             data: resource.data.clone(),
         });
@@ -401,6 +402,7 @@ fn converted_to_document(c: types::Converted) -> ConvertedDocument {
     let mut images = Vec::with_capacity(c.images.len());
     for img in c.images {
         images.push(Image {
+            page: img.page,
             name: img.name,
             data: img.data,
         });
@@ -637,10 +639,12 @@ mod tests {
             markdown: "# hi".into(),
             images: vec![
                 types::Image {
+                    page: None,
                     name: "a.png".into(),
                     data: vec![1, 2],
                 },
                 types::Image {
+                    page: None,
                     name: "b.jpg".into(),
                     data: vec![3],
                 },

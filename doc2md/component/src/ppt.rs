@@ -66,6 +66,7 @@ pub fn convert(blob: &[u8], extract_images: bool) -> Result<Converted, String> {
                 .into_iter()
                 .enumerate()
                 .map(|(i, b)| Image {
+                    page: None,
                     name: format!("image{}.{}", i + 1, b.ext),
                     data: b.data,
                 })
