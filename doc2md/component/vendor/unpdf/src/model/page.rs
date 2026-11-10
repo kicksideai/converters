@@ -30,6 +30,10 @@ pub struct Page {
     /// Unfiltered image and Form resources; a Form may contain further images.
     #[serde(default)]
     pub image_resource_count: u32,
+
+    /// Unfiltered resources move into the document after page parsing.
+    #[serde(skip)]
+    pub(crate) extracted_resources: Vec<(String, Resource)>,
 }
 
 impl Page {
@@ -43,6 +47,7 @@ impl Page {
             rotation: 0,
             images: Vec::new(),
             image_resource_count: 0,
+            extracted_resources: Vec::new(),
         }
     }
 

@@ -46,6 +46,8 @@ lint:
 	$(WIPPY) lint $(WIPPY_LINT_ARGS) --level error
 
 test:
+	cd component && CARGO_TARGET_DIR=target cargo test --release --manifest-path vendor/unpdf/Cargo.toml --lib
+	cd component && cargo test --release
 	$(WIPPY) test $(WIPPY_TEST_ARGS)
 
 load-test:

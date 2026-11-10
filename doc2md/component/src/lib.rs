@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+#[cfg(test)]
+mod pdf_performance;
+
 mod archive;
 mod doc;
 mod escher;
@@ -109,6 +112,7 @@ fn encode_png(samples: &[u8], width: u32, height: u32, channels: usize) -> Optio
     let mut out = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut out, width, height);
+        encoder.set_filter(png::Filter::Up);
         encoder.set_color(color);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().ok()?;
