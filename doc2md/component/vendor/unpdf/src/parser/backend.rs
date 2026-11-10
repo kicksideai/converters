@@ -347,7 +347,11 @@ impl PdfBackend for RawBackend {
             None => return Ok(xobjects),
         };
 
-        for (name, obj) in xobj_dict {
+        // The dictionary is a HashMap; resource name order keeps the page's
+        // images in one order on every parse.
+        let mut entries: Vec<_> = xobj_dict.iter().collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (name, obj) in entries {
             if let Some((n, g)) = obj.as_reference() {
                 if let Some(raw_obj) = self.doc.get_object((n, g)) {
                     let resolved = self.doc.resolve(raw_obj);
@@ -1336,6 +1340,64 @@ mod raw_backend_tests {
             return None;
         }
         RawBackend::load_file(rel).ok()
+    }
+
+    // One page whose XObject dictionary names twelve 1x1 gray images.
+    fn many_image_page() -> Vec<u8> {
+        let count = 12;
+        let names: Vec<String> = (0..count).map(|i| format!("Im{}", (i * 7) % count)).collect();
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
+        ];
+        let entries: Vec<String> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| format!("/{} {} 0 R", name, i + 4))
+            .collect();
+        objects.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << {} >> >> >>",
+            entries.join(" ")
+        ));
+        for _ in &names {
+            objects.push("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{7f}\nendstream".to_string());
+        }
+        let mut out = String::from("%PDF-1.4\n");
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{}\nendobj\n", i + 1, body));
+        }
+        let xref = out.len();
+        out.push_str(&format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1));
+        for offset in offsets {
+            out.push_str(&format!("{:010} 00000 n \n", offset));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+            objects.len() + 1,
+            xref
+        ));
+        out.into_bytes()
+    }
+
+    #[test]
+    fn test_page_xobjects_follow_resource_name_order() {
+        let pdf = many_image_page();
+        for _ in 0..8 {
+            let raw = RawBackend::load_bytes(&pdf).unwrap();
+            let page = *raw.pages().values().next().unwrap();
+            let names: Vec<String> = raw
+                .page_xobjects(page)
+                .unwrap()
+                .into_iter()
+                .map(|xobject| xobject.name)
+                .collect();
+            let mut sorted = names.clone();
+            sorted.sort();
+            assert_eq!(names.len(), 12);
+            assert_eq!(names, sorted);
+        }
     }
 
     #[test]

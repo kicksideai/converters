@@ -21,7 +21,7 @@ entries:
       comment: Rust WebAssembly component that sniffs document format and renders Markdown.
     fs: kickside.convert.doc2md:assets
     path: doc2md.wasm
-    hash: sha256:d466bc9818dc259c04d523ba9d291166f0e93519fbb7a369b3c7891de5d099e7
+    hash: sha256:547df0012a796868254ce7f142ab4efc1f070bdf9a527bcce64778788b47c24d
     method: convert
     imports:
       - wasi:io
@@ -40,7 +40,7 @@ entries:
       comment: Rust WebAssembly component method that converts an inclusive page range of a document; consecutive ranges concatenate to the whole-document Markdown.
     fs: kickside.convert.doc2md:assets
     path: doc2md.wasm
-    hash: sha256:d466bc9818dc259c04d523ba9d291166f0e93519fbb7a369b3c7891de5d099e7
+    hash: sha256:547df0012a796868254ce7f142ab4efc1f070bdf9a527bcce64778788b47c24d
     method: convert-range
     imports:
       - wasi:io
@@ -59,7 +59,7 @@ entries:
       comment: Rust WebAssembly component method returning one entry per page with its extracted-text length and image-resource count, so a caller can OCR only the scanned pages.
     fs: kickside.convert.doc2md:assets
     path: doc2md.wasm
-    hash: sha256:d466bc9818dc259c04d523ba9d291166f0e93519fbb7a369b3c7891de5d099e7
+    hash: sha256:547df0012a796868254ce7f142ab4efc1f070bdf9a527bcce64778788b47c24d
     method: page-resources
     imports:
       - wasi:io
@@ -78,7 +78,7 @@ entries:
       comment: Rust WebAssembly component method returning the page_resources entries of an inclusive page range.
     fs: kickside.convert.doc2md:assets
     path: doc2md.wasm
-    hash: sha256:d466bc9818dc259c04d523ba9d291166f0e93519fbb7a369b3c7891de5d099e7
+    hash: sha256:547df0012a796868254ce7f142ab4efc1f070bdf9a527bcce64778788b47c24d
     method: page-resources-range
     imports:
       - wasi:io

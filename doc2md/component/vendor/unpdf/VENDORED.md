@@ -80,4 +80,13 @@ Rendering pages one at a time and joining the results with a blank line yields
 the whole-document output. `test_page_markers_stay_on_their_own_line_after_any_page_ending`
 and `test_pages_render_independently_of_their_neighbours` hold this.
 
+### 5. Deterministic XObject Order (`src/parser/backend.rs`)
+
+`RawBackend::page_xobjects` iterated the page's `/XObject` dictionary, a
+`HashMap` with a per-instance random seed, so the order of a page's image
+blocks, and of the image links in its Markdown, could differ between two parses
+of the same PDF, including a whole-document parse and a page-range parse. The
+entries are now visited in resource name order.
+`test_page_xobjects_follow_resource_name_order` holds this.
+
 No other unpdf sources are modified.
