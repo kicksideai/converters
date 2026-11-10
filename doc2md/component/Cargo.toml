@@ -24,6 +24,6 @@ emf-core = { git = "https://github.com/mythrnr/emf-rs", tag = "0.0.9", default-f
 wmf-core = { git = "https://github.com/mythrnr/wmf-rs", tag = "0.0.25", default-features = false, features = ["svg"] }
 
 [profile.release]
-opt-level = "s"
+opt-level = 3
 strip = true
 lto = true

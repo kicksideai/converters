@@ -2,6 +2,7 @@ local test = require("test")
 local doc2md = require("doc2md")
 local fixtures = require("fixtures")
 local pdf_pages = require("pdf_pages")
+local registry = require("registry")
 
 local function assert_markdown_document(document, expected)
     test.eq(type(document), "table")
@@ -31,6 +32,14 @@ end
 
 local function define()
     test.describe("doc2md.convert", function()
+        test.it("leaves the effective conversion budget to the caller", function()
+            local converter = assert(registry.get("kickside.convert.doc2md:converter"))
+            local data = converter.data or converter
+            test.eq(data.limits.max_execution_ms, 600000)
+            local page_resources = assert(registry.get("kickside.convert.doc2md:page_resources"))
+            local page_data = page_resources.data or page_resources
+            test.eq(page_data.limits.max_execution_ms, 15000)
+        end)
         test.it("keeps page markers separate after a trailing bullet and an empty page", function()
             local bytes = pdf_pages.pdf({0, 0, 0}, nil, nil, {string.char(149), "Next page fact"})
             for _, images in ipairs({false, true}) do

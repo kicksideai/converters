@@ -1,6 +1,5 @@
 //! PDF document parser.
 
-use std::collections::HashMap;
 use std::io::Read;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -77,9 +76,6 @@ impl PdfParser {
         let mut document = Document::new();
         let mut err_out: Option<Error> = None;
 
-        // Snapshot page map so we can do resource extraction inside the handler.
-        let page_ids = self.backend.pages();
-
         let quality = run_stream(&*self.backend, &opts, |ev| match ev {
             ParseEvent::DocumentStart {
                 metadata,
@@ -92,21 +88,10 @@ impl PdfParser {
                 document.form_fields = form_fields;
                 ControlFlow::Continue(())
             }
-            ParseEvent::PageParsed(page) => {
-                if self.options.extract_resources
-                    && self.options.extract_mode != ExtractMode::StructureOnly
-                {
-                    if let Some(page_id) = page_ids.get(&page.number) {
-                        if let Ok(xobjects) = self.backend.page_xobjects(*page_id) {
-                            for xobj in xobjects {
-                                let key = format!("page{}_{}", page.number, xobj.name);
-                                if let Some(mut r) = convert_xobject_pub(xobj) {
-                                    r.page = Some(page.number);
-                                    document.resources.insert(key, r);
-                                }
-                            }
-                        }
-                    }
+            ParseEvent::PageParsed(mut page) => {
+                for (key, mut resource) in std::mem::take(&mut page.extracted_resources) {
+                    resource.page = Some(page.number);
+                    document.resources.insert(key, resource);
                 }
                 document.add_page(page);
                 ControlFlow::Continue(())
@@ -133,24 +118,6 @@ impl PdfParser {
         document.extraction_quality = final_q;
 
         Ok(document)
-    }
-
-    /// Extract embedded resources (images).
-    #[allow(dead_code)]
-    fn extract_resources(&self) -> Result<HashMap<String, Resource>> {
-        let mut resources = HashMap::new();
-        for (page_num, page_id) in self.backend.pages() {
-            if let Ok(xobjects) = self.backend.page_xobjects(page_id) {
-                for xobj in xobjects {
-                    let key = format!("page{}_{}", page_num, xobj.name);
-                    if let Some(mut resource) = convert_xobject_pub(xobj) {
-                        resource.page = Some(page_num);
-                        resources.insert(key, resource);
-                    }
-                }
-            }
-        }
-        Ok(resources)
     }
 
     /// Get the number of pages.
@@ -254,6 +221,8 @@ pub(crate) fn parse_single_page(
                 for xobj in xobjects {
                     let base_id = format!("page{}_{}", page_num, xobj.name);
                     if let Some(resource) = convert_xobject_pub(xobj) {
+                        page.extracted_resources.push((base_id.clone(), resource));
+                        let resource = &page.extracted_resources.last().unwrap().1;
                         if !resource.is_image() {
                             continue;
                         }
@@ -279,8 +248,9 @@ pub(crate) fn parse_single_page(
                             *bw = resource.width.map(|w| w as f32);
                             *bh = resource.height.map(|h| h as f32);
                         }
+                        let image = resource.clone();
                         page.add_block(img_block);
-                        page.images.push((id, resource));
+                        page.images.push((id, image));
                     }
                 }
             }
@@ -290,7 +260,7 @@ pub(crate) fn parse_single_page(
     Ok(page)
 }
 
-/// Convert a raw XObject into a model resource for buffered and streamed parsing.
+/// Convert a raw image XObject into a model resource.
 pub(crate) fn convert_xobject_pub(xobj: RawXObject) -> Option<Resource> {
     if xobj.subtype != "Image" { return None; }
     let mime_type = match xobj.filter.as_deref() {
@@ -563,6 +533,94 @@ fn parse_pdf_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 mod tests {
     use super::*;
     use chrono::Datelike;
+
+    #[test]
+    fn page_xobjects_are_extracted_once_without_losing_filtered_resources() {
+        use super::super::backend::{
+            BackendFontInfo, ContentOp, PageId, PdfMetadataRaw, RawOutlineItem,
+        };
+        use std::collections::BTreeMap;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        struct Backend(Arc<AtomicUsize>);
+        impl PdfBackend for Backend {
+            fn pages(&self) -> BTreeMap<u32, PageId> {
+                (1..=100).map(|n| (n, (n, 0))).collect()
+            }
+            fn page_fonts(&self, _: PageId) -> Result<Vec<BackendFontInfo>> {
+                Ok(vec![])
+            }
+            fn page_content(&self, _: PageId) -> Result<Vec<u8>> {
+                Ok(vec![])
+            }
+            fn decode_content(&self, _: &[u8]) -> Result<Vec<ContentOp>> {
+                Ok(vec![])
+            }
+            fn decode_text(&self, _: PageId, _: &[u8], _: &[u8]) -> String {
+                String::new()
+            }
+            fn metadata(&self) -> PdfMetadataRaw {
+                PdfMetadataRaw::default()
+            }
+            fn page_dimensions(&self, _: PageId) -> (f32, f32) {
+                (612.0, 792.0)
+            }
+            fn outline(&self) -> Result<Vec<RawOutlineItem>> {
+                Ok(vec![])
+            }
+            fn page_xobjects(&self, _: PageId) -> Result<Vec<RawXObject>> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok([
+                    ("raw", "Image", None, 4),
+                    ("photo", "Image", Some("DCTDecode"), 200),
+                    ("small", "Image", Some("DCTDecode"), 4),
+                    ("form", "Form", None, 200),
+                ]
+                .into_iter()
+                .map(|(name, subtype, filter, size)| RawXObject {
+                    name: name.into(),
+                    subtype: subtype.into(),
+                    filter: filter.map(String::from),
+                    data: vec![127; 16],
+                    width: Some(size),
+                    height: Some(size),
+                    bits_per_component: Some(8),
+                    color_space: Some(("DeviceGray".into(), Some(crate::model::ColorSpace::Gray))),
+                    samples: None,
+                })
+                .collect())
+            }
+        }
+        for parallel in [false, true] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let parser = PdfParser {
+                backend: Box::new(Backend(calls.clone())),
+                options: ParseOptions::new()
+                    .with_resources(true)
+                    .with_parallel(parallel),
+            };
+            let doc = parser.parse().unwrap();
+            assert_eq!(
+                calls.load(Ordering::Relaxed),
+                100,
+                "extract XObjects once per page"
+            );
+            assert_eq!(doc.resources.len(), 300);
+            for page in &doc.pages {
+                assert_eq!(page.image_resource_count, 4);
+                assert_eq!(page.images.len(), 1);
+                assert_eq!(page.images[0].0, format!("page{}_photo.jpg", page.number));
+                for name in ["raw", "photo", "small"] {
+                    let resource = &doc.resources[&format!("page{}_{name}", page.number)];
+                    assert_eq!(resource.page, Some(page.number));
+                    assert_eq!(resource.data, vec![127; 16]);
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_parse_pdf_date() {

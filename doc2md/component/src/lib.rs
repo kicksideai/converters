@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+#[cfg(test)]
+mod pdf_performance;
+
 mod archive;
 mod doc;
 mod escher;

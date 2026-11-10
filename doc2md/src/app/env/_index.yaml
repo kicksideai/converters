@@ -49,6 +49,7 @@ entries:
       description: End-to-end conversion tests across PDF, Office, URL, options, and error paths.
     source: file://doc2md_convert_test.lua
     method: run
+    modules: [registry]
     imports:
       test: wippy.test:test
       doc2md: kickside.convert.doc2md:doc2md

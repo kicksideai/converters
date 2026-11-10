@@ -39,6 +39,11 @@ make lint
 make test
 ```
 
+`make test` also runs the native Rust suites in release mode. The generated
+100-page scanned PDF checks image pixels and page identity. The deterministic
+performance guard requires one XObject extraction per page, including resources
+omitted from page blocks. PNG round-trip checks cover grayscale, RGB and CMYK samples.
+
 `make build-component` rebuilds and stages the WASM asset and its registry hash.
 Run the converter suite against hosts using each database engine when changing
 host integration. The converter suite itself has no SQL dialect matrix.

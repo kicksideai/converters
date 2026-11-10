@@ -107,6 +107,7 @@ fn encode_png(pixels: &[u8], width: u32, height: u32, gray: bool) -> Option<Vec<
     let mut out = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut out, width, height);
+        encoder.set_filter(png::Filter::Up);
         encoder.set_color(if gray {
             png::ColorType::Grayscale
         } else {
