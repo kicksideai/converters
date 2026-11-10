@@ -21,7 +21,7 @@ entries:
       comment: Rust WebAssembly component that sniffs document format and renders Markdown.
     fs: kickside.convert.doc2md:assets
     path: doc2md.wasm
-    hash: sha256:6aad265c69786b31b78a15a2f754c3a346d5854e2ebbd9843d072eac776a1088
+    hash: sha256:6e1f354df2d5c609665d5d1f8a95fafe6477adf4921e454be420cf4ce45f81d5
     method: convert
     imports:
       - wasi:io
@@ -29,8 +29,9 @@ entries:
       - wasi:random
     pool:
       type: inline
-    # Per-call kill deadline for a hung whole-document text extraction.
-    # Overridable per deploy like pool settings.
+    # Per-call kill deadline for a hung conversion. Callers convert long PDFs
+    # in page ranges so each call stays within it. Overridable per deploy like
+    # pool settings.
     limits:
       max_execution_ms: 90000
 
@@ -40,7 +41,7 @@ entries:
       comment: Rust WebAssembly component method returning one entry per page with its extracted-text length and image-resource count, so a caller can OCR only the scanned pages.
     fs: kickside.convert.doc2md:assets
     path: doc2md.wasm
-    hash: sha256:6aad265c69786b31b78a15a2f754c3a346d5854e2ebbd9843d072eac776a1088
+    hash: sha256:6e1f354df2d5c609665d5d1f8a95fafe6477adf4921e454be420cf4ce45f81d5
     method: page-resources
     imports:
       - wasi:io
@@ -56,7 +57,7 @@ entries:
   - name: doc2md
     kind: library.lua
     meta:
-      comment: Public Lua SDK for converting documents to Markdown. Returns a table exposing convert(request[, options]) and new(runtime?); request is { bytes = <binary string> } or { url = <http(s) URL> }; options sets extract_images. Errors expose native message(), kind(), retryable() and details().code.
+      comment: Public Lua SDK for converting documents to Markdown. Returns a table exposing convert(request[, options]), page_resources(request[, options]) and new(runtime?); request is { bytes = <binary string> } or { url = <http(s) URL> }; options sets extract_images, page_markers and pages = { first, last }. Errors expose native message(), kind(), retryable() and details().code.
     source: file://doc2md.lua
     modules:
       - http_client

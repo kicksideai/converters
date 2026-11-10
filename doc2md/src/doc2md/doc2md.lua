@@ -3,14 +3,25 @@ type ConvertRequest = {
     url: string?,
 }
 
+type PageRange = {
+    first: integer,
+    last: integer,
+}
+
 type ConvertOptions = {
     extract_images: boolean?,
     page_markers: boolean?,
+    pages: PageRange?,
+}
+
+type PageResourcesOptions = {
+    pages: PageRange?,
 }
 
 type Settings = {
     extract_images: boolean,
     page_markers: boolean,
+    pages: PageRange?,
 }
 
 type Marker = {
@@ -48,7 +59,20 @@ local ALLOWED_SCHEME = "^https?://"
 local OPTION_KEYS = {
     extract_images = true,
     page_markers = true,
+    pages = true,
 }
+
+local PAGE_RESOURCES_OPTION_KEYS = {
+    pages = true,
+}
+
+local PAGE_RANGE_KEYS = {
+    first = true,
+    last = true,
+}
+
+-- The component's error code for a page range outside the document.
+local ERR_RANGE = 4
 
 local function reject_unknown(options: { [string]: any }, allowed: { [string]: boolean }): string?
     for key in pairs(options) do
@@ -58,6 +82,29 @@ local function reject_unknown(options: { [string]: any }, allowed: { [string]: b
     end
 
     return nil
+end
+
+-- normalize_pages validates an inclusive 1-based page range { first, last }.
+local function normalize_pages(pages: any): (PageRange?, string?)
+    if pages == nil then
+        return nil, nil
+    end
+    if type(pages) ~= "table" then
+        return nil, "pages must be a table { first, last } when provided"
+    end
+    local unknown = reject_unknown(pages, PAGE_RANGE_KEYS)
+    if unknown ~= nil then
+        return nil, "pages: " .. unknown
+    end
+    local first = math.tointeger(pages.first)
+    local last = math.tointeger(pages.last)
+    if first == nil or last == nil then
+        return nil, "pages.first and pages.last must be integers"
+    end
+    if first < 1 or last < first then
+        return nil, "pages must satisfy 1 <= first <= last"
+    end
+    return { first = first :: integer, last = last :: integer }, nil
 end
 
 local function normalize_options(options: ConvertOptions?): (Settings?, string?)
@@ -80,7 +127,38 @@ local function normalize_options(options: ConvertOptions?): (Settings?, string?)
         end
     end
 
-    return { extract_images = options.extract_images == true, page_markers = options.page_markers == true }, nil
+    local pages, pages_err = normalize_pages(options.pages)
+    if pages_err ~= nil then
+        return nil, pages_err
+    end
+
+    return { extract_images = options.extract_images == true, page_markers = options.page_markers == true, pages = pages }, nil
+end
+
+local function normalize_page_resources_options(options: PageResourcesOptions?): (PageRange?, string?)
+    if options == nil then
+        return nil, nil
+    end
+    if type(options) ~= "table" then
+        return nil, "options must be a table when provided"
+    end
+    local unknown = reject_unknown(options, PAGE_RESOURCES_OPTION_KEYS)
+    if unknown ~= nil then
+        return nil, unknown
+    end
+    return normalize_pages(options.pages)
+end
+
+-- component_error maps a component failure: a page range outside the document
+-- is invalid input, anything else is undecodable input.
+local function component_error(err: any): error
+    local message = (type(err) == "table" and tostring(err.message)) or tostring(err)
+    local code = "decode_failed"
+    if type(err) == "table" and err.code == ERR_RANGE then
+        code = "invalid_input"
+    end
+    return (errors.new({kind = errors.INVALID, retryable = false,
+        message = message, details = {code = code}}) :: error)
 end
 
 -- markers returns the hidden page and slide comments that convert inserts when
@@ -265,7 +343,7 @@ local function new(runtime: Runtime?): any
             },
         }
 
-        local result, call_err = funcs.call(CONVERTER, wasm_request)
+        local result, call_err = funcs.call(CONVERTER, wasm_request, settings.pages)
         if call_err ~= nil then
             return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
                 message = tostring(call_err), details = {code = "internal"}}) :: error)
@@ -277,9 +355,7 @@ local function new(runtime: Runtime?): any
         end
 
         if result.err ~= nil then
-            local message = (type(result.err) == "table" and tostring(result.err.message)) or tostring(result.err)
-            return nil, (errors.new({kind = errors.INVALID, retryable = false,
-                message = message, details = {code = "decode_failed"}}) :: error)
+            return nil, component_error(result.err)
         end
 
         local document = result.ok
@@ -297,22 +373,36 @@ local function new(runtime: Runtime?): any
             return nil, images_err
         end
 
+        local page_count = math.tointeger(document["page-count"])
+        if page_count == nil then
+            return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
+                message = PREFIX .. "converter returned invalid page count: expected integer, got " .. type(document["page-count"]), details = {code = "internal"}}) :: error)
+        end
+
         return {
             markdown = document.markdown,
             images = images,
+            page_count = page_count,
         }, nil
     end
 
-    -- page_resources returns one entry per page: { page, text_len, image_count }.
-    -- A page with little text and one or more images is a scanned page, so callers
-    -- can render and OCR only those pages instead of the whole document.
-    local function page_resources(request: ConvertRequest): (any, error?)
+    -- page_resources returns one entry per page: { page, text_len, image_count },
+    -- for every page or for options.pages = { first, last }. A page with little
+    -- text and one or more images is a scanned page, so callers can render and OCR
+    -- only those pages instead of the whole document.
+    local function page_resources(request: ConvertRequest, options: PageResourcesOptions?): (any, error?)
         local blob, src_err = resolve_source(request)
         if src_err ~= nil then
             return nil, src_err
         end
 
-        local result, call_err = funcs.call(PAGE_RESOURCES, blob)
+        local pages, opt_err = normalize_page_resources_options(options)
+        if opt_err ~= nil then
+            return nil, (errors.new({kind = errors.INVALID, retryable = false,
+                message = PREFIX .. opt_err, details = {code = "invalid_input"}}) :: error)
+        end
+
+        local result, call_err = funcs.call(PAGE_RESOURCES, blob, pages)
         if call_err ~= nil then
             return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
                 message = tostring(call_err), details = {code = "internal"}}) :: error)
@@ -322,9 +412,7 @@ local function new(runtime: Runtime?): any
                 message = PREFIX .. "page_resources returned no result", details = {code = "internal"}}) :: error)
         end
         if result.err ~= nil then
-            local message = (type(result.err) == "table" and tostring(result.err.message)) or tostring(result.err)
-            return nil, (errors.new({kind = errors.INVALID, retryable = false,
-                message = message, details = {code = "decode_failed"}}) :: error)
+            return nil, component_error(result.err)
         end
 
         local raw = result.ok

@@ -7,6 +7,14 @@ world converter {
         page: option<u32>,
     }
 
+    // Inclusive 1-based page range. `last` past the final page selects through
+    // the final page; `first` must name an existing page. A document without
+    // pages (anything but PDF) is one page.
+    record page-range {
+        first: u32,
+        last: u32,
+    }
+
     record conversion-options {
         extract-images: bool,
         // Inserts hidden HTML comments at each PDF page (`<!-- page N -->`) and
@@ -22,6 +30,8 @@ world converter {
     record converted-document {
         markdown: string,
         images: list<image>,
+        // Pages in the whole document, whatever range was converted.
+        page-count: u32,
     }
 
     record conversion-error {
@@ -37,9 +47,13 @@ world converter {
         image-count: u32,
     }
 
-    export convert: func(request: conversion-request) -> result<converted-document, conversion-error>;
+    // Converts the whole document, or only the given pages. Converting
+    // consecutive ranges and concatenating their Markdown in page order yields
+    // exactly the whole-document Markdown; images keep the whole-document order.
+    export convert: func(request: conversion-request, pages: option<page-range>) -> result<converted-document, conversion-error>;
 
     // Returns one entry per page with its extracted-text length and image-resource
-    // count. PDFs report real pages; other formats report a single logical page.
-    export page-resources: func(bytes: list<u8>) -> result<list<page-info>, conversion-error>;
+    // count, for every page or for the given range. PDFs report real pages;
+    // other formats report a single logical page.
+    export page-resources: func(bytes: list<u8>, pages: option<page-range>) -> result<list<page-info>, conversion-error>;
 }

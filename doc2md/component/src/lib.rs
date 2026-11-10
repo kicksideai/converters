@@ -30,6 +30,7 @@ const SPSS_MAGIC: &[u8] = b"$FL";
 const ERR_UNSUPPORTED: u8 = 1;
 const ERR_PARSE: u8 = 2;
 const ERR_RENDER: u8 = 3;
+const ERR_RANGE: u8 = 4;
 
 enum Format {
     Pdf,
@@ -228,11 +229,67 @@ fn strip_placeholders(markdown: &str) -> String {
     result
 }
 
-fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, ConversionError> {
+// The parse selection for a page range; `last` may lie past the final page.
+fn page_selection(range: PageRange) -> Result<unpdf::PageSelection, ConversionError> {
+    if range.first == 0 || range.first > range.last {
+        return Err(fail(
+            ERR_RANGE,
+            format!("invalid page range {}-{}", range.first, range.last),
+        ));
+    }
+    Ok(unpdf::PageSelection::Range(range.first..=range.last))
+}
+
+// A range must start at an existing page of a document of `page_count` pages.
+fn check_range_start(range: PageRange, page_count: u32) -> Result<(), ConversionError> {
+    page_selection(range)?;
+    if range.first > page_count {
+        return Err(fail(
+            ERR_RANGE,
+            format!(
+                "page range starts at page {} past the last page {}",
+                range.first, page_count
+            ),
+        ));
+    }
+    Ok(())
+}
+
+// Parses the selected pages of a PDF; the document's metadata keeps the page
+// count of the whole document.
+fn parse_pdf(
+    blob: &[u8],
+    extract_resources: bool,
+    pages: Option<PageRange>,
+) -> Result<unpdf::Document, ConversionError> {
     let blob = trim_pdf_trailer(blob);
-    let options = unpdf::ParseOptions::new().with_resources(settings.extract_images);
+    let mut options = unpdf::ParseOptions::new().with_resources(extract_resources);
+    if let Some(range) = pages {
+        options = options.with_pages(page_selection(range)?);
+    }
     let doc = unpdf::parse_bytes_with_options(blob, options)
         .map_err(|e| fail(ERR_PARSE, e.to_string()))?;
+    if let Some(range) = pages {
+        check_range_start(range, doc.metadata.page_count)?;
+    }
+    Ok(doc)
+}
+
+// Converts the selected pages of a PDF and returns the page count of the whole
+// document. The Markdown of a range is the exact slice of the whole-document
+// Markdown: a range before the last page keeps the blank line that separates
+// it from the next page, and the form fields section follows the last page.
+fn convert_pdf(
+    blob: &[u8],
+    settings: Settings,
+    pages: Option<PageRange>,
+) -> Result<(types::Converted, u32), ConversionError> {
+    let mut doc = parse_pdf(blob, settings.extract_images, pages)?;
+    let page_count = doc.metadata.page_count;
+    let through_last_page = pages.is_none_or(|range| range.last >= page_count);
+    if !through_last_page {
+        doc.form_fields.clear();
+    }
     let marker_style = if settings.page_markers {
         unpdf::PageMarkerStyle::Comment
     } else {
@@ -241,12 +298,16 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
     let render = unpdf::RenderOptions::default().with_page_markers(marker_style);
     let mut markdown =
         unpdf::render::to_markdown(&doc, &render).map_err(|e| fail(ERR_RENDER, e.to_string()))?;
+    if !through_last_page && !markdown.is_empty() {
+        markdown.push_str("\n\n");
+    }
 
     if !settings.extract_images {
-        return Ok(types::Converted {
+        let converted = types::Converted {
             markdown: strip_placeholders(&markdown),
             images: Vec::new(),
-        });
+        };
+        return Ok((converted, page_count));
     }
 
     let mut keys: Vec<&String> = doc.resources.keys().collect();
@@ -279,7 +340,7 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
 
     markdown = link_placeholders(&markdown, &ordered);
 
-    Ok(types::Converted { markdown, images })
+    Ok((types::Converted { markdown, images }, page_count))
 }
 
 fn office_image_ext(mime: Option<&str>) -> &'static str {
@@ -398,7 +459,7 @@ fn convert_office(
     Ok(types::Converted { markdown, images })
 }
 
-fn converted_to_document(c: types::Converted) -> ConvertedDocument {
+fn converted_to_document(c: types::Converted, page_count: u32) -> ConvertedDocument {
     let mut images = Vec::with_capacity(c.images.len());
     for img in c.images {
         images.push(Image {
@@ -410,6 +471,7 @@ fn converted_to_document(c: types::Converted) -> ConvertedDocument {
     ConvertedDocument {
         markdown: c.markdown,
         images,
+        page_count,
     }
 }
 
@@ -495,41 +557,57 @@ impl Budget {
     }
 }
 
-// Single content-sniffing router. The shared `Budget` bounds both archive nesting
-// depth and total decompressed output across the whole nested-archive tree.
+// Converts a whole document; archive members recurse through here.
 fn dispatch(
     blob: &[u8],
     settings: Settings,
     budget: &mut Budget,
 ) -> Result<types::Converted, ConversionError> {
+    dispatch_pages(blob, settings, None, budget).map(|(converted, _)| converted)
+}
+
+// Single content-sniffing router, returning the converted pages and the page
+// count of the whole document. Only PDFs have pages; any other format is one
+// page. The shared `Budget` bounds both archive nesting depth and total
+// decompressed output across the whole nested-archive tree.
+fn dispatch_pages(
+    blob: &[u8],
+    settings: Settings,
+    pages: Option<PageRange>,
+    budget: &mut Budget,
+) -> Result<(types::Converted, u32), ConversionError> {
     if budget.too_deep() {
         return Err(fail(ERR_PARSE, "archive nesting too deep"));
     }
-    let mut converted = match sniff(blob) {
-        Format::Pdf => convert_pdf(blob, settings),
-        Format::Office => convert_office(blob, settings, budget),
-        Format::Ole2 => convert_ole2(blob, settings),
-        Format::Rtf => convert_rtf(blob, settings),
-        Format::Spss => convert_spss(blob),
-        Format::Text => convert_text(blob),
-        Format::Unknown => Err(fail(
+    let format = sniff(blob);
+    if let (false, Some(range)) = (matches!(format, Format::Pdf), pages) {
+        check_range_start(range, 1)?;
+    }
+    let (mut converted, page_count) = match format {
+        Format::Pdf => convert_pdf(blob, settings, pages)?,
+        Format::Office => (convert_office(blob, settings, budget)?, 1),
+        Format::Ole2 => (convert_ole2(blob, settings)?, 1),
+        Format::Rtf => (convert_rtf(blob, settings)?, 1),
+        Format::Spss => (convert_spss(blob)?, 1),
+        Format::Text => (convert_text(blob)?, 1),
+        Format::Unknown => return Err(fail(
             ERR_UNSUPPORTED,
             "unsupported or unrecognized format (expected PDF, OOXML docx/xlsx/pptx, legacy doc/xls/ppt, rtf, text/markdown, or a zip archive of these)",
         )),
-    }?;
+    };
     metafile::convert_in_place(&mut converted.images);
-    Ok(converted)
+    Ok((converted, page_count))
 }
 
 // Per-page text length and image-resource count. A scanned page reads as little or
 // no text with one or more images, which is the signal a caller uses to OCR only the
 // pages that need it instead of rendering the whole document.
-fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError> {
+fn collect_page_resources(
+    bytes: &[u8],
+    pages: Option<PageRange>,
+) -> Result<Vec<PageInfo>, ConversionError> {
     if bytes.starts_with(PDF_MAGIC) {
-        let blob = trim_pdf_trailer(bytes);
-        let options = unpdf::ParseOptions::new().with_resources(true);
-        let doc = unpdf::parse_bytes_with_options(blob, options)
-            .map_err(|e| fail(ERR_PARSE, e.to_string()))?;
+        let doc = parse_pdf(bytes, true, pages)?;
         let mut out = Vec::with_capacity(doc.pages.len());
         for page in &doc.pages {
             let mut text = String::new();
@@ -551,6 +629,9 @@ fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError
 
     // Non-PDF formats are not scanned-image documents; report a single logical page
     // from the converted output so callers get a uniform shape.
+    if let Some(range) = pages {
+        check_range_start(range, 1)?;
+    }
     let mut budget = Budget::root();
     let converted = dispatch(
         bytes,
@@ -568,14 +649,21 @@ fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError
 }
 
 impl Guest for Component {
-    fn convert(request: ConversionRequest) -> Result<ConvertedDocument, ConversionError> {
+    fn convert(
+        request: ConversionRequest,
+        pages: Option<PageRange>,
+    ) -> Result<ConvertedDocument, ConversionError> {
         let settings = Settings::from(request.options);
         let mut budget = Budget::root();
-        dispatch(&request.bytes, settings, &mut budget).map(converted_to_document)
+        dispatch_pages(&request.bytes, settings, pages, &mut budget)
+            .map(|(converted, page_count)| converted_to_document(converted, page_count))
     }
 
-    fn page_resources(bytes: Vec<u8>) -> Result<Vec<PageInfo>, ConversionError> {
-        collect_page_resources(&bytes)
+    fn page_resources(
+        bytes: Vec<u8>,
+        pages: Option<PageRange>,
+    ) -> Result<Vec<PageInfo>, ConversionError> {
+        collect_page_resources(&bytes, pages)
     }
 }
 
@@ -650,7 +738,7 @@ mod tests {
                 },
             ],
         };
-        let doc = converted_to_document(c);
+        let doc = converted_to_document(c, 1);
         assert_eq!(doc.markdown, "# hi");
         assert_eq!(doc.images.len(), 2);
         assert_eq!(doc.images[0].name, "a.png");
@@ -746,25 +834,27 @@ mod tests {
 
     #[test]
     fn guest_convert_accepts_raw_bytes() {
-        let doc = <Component as Guest>::convert(request(
-            include_bytes!("../tests/assets/doc.doc"),
-            false,
-        ))
+        let doc = <Component as Guest>::convert(
+            request(include_bytes!("../tests/assets/doc.doc"), false),
+            None,
+        )
         .unwrap();
         assert!(doc.markdown.contains("Hello from DOC legacy"));
         assert!(doc.images.is_empty());
         // Plain text now passes through; genuinely binary, unrecognized bytes are rejected.
-        let text = <Component as Guest>::convert(request(b"not a document", false)).unwrap();
+        let text = <Component as Guest>::convert(request(b"not a document", false), None).unwrap();
         assert_eq!(text.markdown, "not a document");
-        assert!(<Component as Guest>::convert(request(&[0x00, 0xFF, 0x00, 0x01], false)).is_err());
+        assert!(
+            <Component as Guest>::convert(request(&[0x00, 0xFF, 0x00, 0x01], false), None).is_err()
+        );
     }
 
     #[test]
     fn convert_archive_expands_entries_under_headings() {
-        let doc = <Component as Guest>::convert(request(
-            include_bytes!("../tests/assets/archive.zip"),
-            false,
-        ))
+        let doc = <Component as Guest>::convert(
+            request(include_bytes!("../tests/assets/archive.zip"), false),
+            None,
+        )
         .unwrap();
         assert!(doc.markdown.contains("## notes.md"));
         assert!(doc.markdown.contains("Hello from ZIP entry"));
@@ -776,10 +866,10 @@ mod tests {
 
     #[test]
     fn convert_archive_reports_skipped_unsupported_entries() {
-        let doc = <Component as Guest>::convert(request(
-            include_bytes!("../tests/assets/archive_skip.zip"),
-            false,
-        ))
+        let doc = <Component as Guest>::convert(
+            request(include_bytes!("../tests/assets/archive_skip.zip"), false),
+            None,
+        )
         .unwrap();
         assert!(doc.markdown.contains("## a.md"));
         // Exactly one unsupported entry -> singular footer naming it.
@@ -793,10 +883,10 @@ mod tests {
 
     #[test]
     fn convert_archive_recurses_into_nested_archives() {
-        let doc = <Component as Guest>::convert(request(
-            include_bytes!("../tests/assets/archive_nested.zip"),
-            false,
-        ))
+        let doc = <Component as Guest>::convert(
+            request(include_bytes!("../tests/assets/archive_nested.zip"), false),
+            None,
+        )
         .unwrap();
         assert!(doc.markdown.contains("## archive.zip"));
         assert!(doc.markdown.contains("Hello from ZIP entry"));
@@ -808,10 +898,10 @@ mod tests {
         // bomb_oversized.zip declares a 70 MiB member (> 64 MiB per-entry cap) that
         // compresses to a few KB. The good member must still convert; the bomb is
         // skipped by the size guard and never fully decompressed.
-        let doc = <Component as Guest>::convert(request(
-            include_bytes!("../tests/assets/bomb_oversized.zip"),
-            false,
-        ))
+        let doc = <Component as Guest>::convert(
+            request(include_bytes!("../tests/assets/bomb_oversized.zip"), false),
+            None,
+        )
         .unwrap();
         assert!(doc.markdown.contains("## good.md"));
         assert!(doc.markdown.contains("real content"));
@@ -826,10 +916,10 @@ mod tests {
     fn zip_bomb_high_ratio_member_is_skipped() {
         // ratio.bin is 50 MiB (under the 64 MiB cap and the 128 MiB budget), so only
         // the compression-ratio guard (ratio 1030 > 1000) can reject it.
-        let doc = <Component as Guest>::convert(request(
-            include_bytes!("../tests/assets/bomb_ratio.zip"),
-            false,
-        ))
+        let doc = <Component as Guest>::convert(
+            request(include_bytes!("../tests/assets/bomb_ratio.zip"), false),
+            None,
+        )
         .unwrap();
         assert!(doc.markdown.contains("## ok.md"));
         assert!(
@@ -844,10 +934,10 @@ mod tests {
     fn zip_with_too_many_entries_is_capped() {
         // many_entries.zip holds 4097 members; only MAX_ENTRIES are iterated and the
         // overflow is reported rather than silently ignored.
-        let doc = <Component as Guest>::convert(request(
-            include_bytes!("../tests/assets/many_entries.zip"),
-            false,
-        ))
+        let doc = <Component as Guest>::convert(
+            request(include_bytes!("../tests/assets/many_entries.zip"), false),
+            None,
+        )
         .unwrap();
         assert!(
             doc.markdown
@@ -951,8 +1041,10 @@ mod tests {
         let doc = convert_pdf(
             include_bytes!("../tests/assets/sample.pdf"),
             settings(false),
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .0;
         assert!(doc.markdown.contains("Hello from PDF"));
         assert!(doc.images.is_empty());
     }
@@ -964,8 +1056,10 @@ mod tests {
         let doc = convert_pdf(
             include_bytes!("../tests/assets/ascii85_flate.pdf"),
             settings(false),
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .0;
         assert_eq!(
             doc.markdown.trim(),
             "PUBLIC ASCII85 REGRESSION: The same text must survive every encoding."
@@ -1012,9 +1106,9 @@ mod tests {
         // Public generated fixture: three 16pt heading lines alternating with
         // three 10pt body lines (equal span counts). Smaller font is body.
         let blob = include_bytes!("../tests/assets/synthetic_heading_tie.pdf");
-        let first = convert_pdf(blob, settings(false)).unwrap().markdown;
+        let first = convert_pdf(blob, settings(false), None).unwrap().0.markdown;
         for _ in 0..20 {
-            let again = convert_pdf(blob, settings(false)).unwrap().markdown;
+            let again = convert_pdf(blob, settings(false), None).unwrap().0.markdown;
             assert_eq!(
                 again, first,
                 "PDF heading classification must be stable across runs"
@@ -1062,7 +1156,8 @@ mod tests {
 
     #[test]
     fn page_resources_reports_text_pages_for_pdf() {
-        let pages = collect_page_resources(include_bytes!("../tests/assets/sample.pdf")).unwrap();
+        let pages =
+            collect_page_resources(include_bytes!("../tests/assets/sample.pdf"), None).unwrap();
         assert!(!pages.is_empty(), "expected at least one page");
         assert_eq!(pages[0].page, 1);
         assert!(
@@ -1074,7 +1169,8 @@ mod tests {
 
     #[test]
     fn page_resources_reports_single_page_for_non_pdf() {
-        let pages = collect_page_resources(include_bytes!("../tests/assets/docx.docx")).unwrap();
+        let pages =
+            collect_page_resources(include_bytes!("../tests/assets/docx.docx"), None).unwrap();
         assert_eq!(
             pages.len(),
             1,
@@ -1163,8 +1259,13 @@ mod tests {
 
     #[test]
     fn convert_pdf_marks_each_page_when_page_markers_are_requested() {
-        let doc =
-            convert_pdf(include_bytes!("../tests/assets/sample.pdf"), located(false)).unwrap();
+        let doc = convert_pdf(
+            include_bytes!("../tests/assets/sample.pdf"),
+            located(false),
+            None,
+        )
+        .unwrap()
+        .0;
         assert!(
             doc.markdown.starts_with("<!-- page 1 -->"),
             "{}",
@@ -1175,7 +1276,13 @@ mod tests {
 
     #[test]
     fn convert_pdf_keeps_page_markers_when_images_are_linked() {
-        let doc = convert_pdf(include_bytes!("../tests/assets/sample.pdf"), located(true)).unwrap();
+        let doc = convert_pdf(
+            include_bytes!("../tests/assets/sample.pdf"),
+            located(true),
+            None,
+        )
+        .unwrap()
+        .0;
         assert!(doc.markdown.contains("<!-- page 1 -->"), "{}", doc.markdown);
     }
 
@@ -1184,8 +1291,10 @@ mod tests {
         let doc = convert_pdf(
             include_bytes!("../tests/assets/sample.pdf"),
             settings(false),
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .0;
         assert!(!doc.markdown.contains("<!-- page"), "{}", doc.markdown);
     }
 
@@ -1209,13 +1318,16 @@ mod tests {
 
     #[test]
     fn exported_convert_honours_the_page_markers_option() {
-        let doc = <Component as Guest>::convert(ConversionRequest {
-            bytes: include_bytes!("../tests/assets/sample.pdf").to_vec(),
-            options: ConversionOptions {
-                extract_images: false,
-                page_markers: true,
+        let doc = <Component as Guest>::convert(
+            ConversionRequest {
+                bytes: include_bytes!("../tests/assets/sample.pdf").to_vec(),
+                options: ConversionOptions {
+                    extract_images: false,
+                    page_markers: true,
+                },
             },
-        })
+            None,
+        )
         .unwrap();
         assert!(doc.markdown.contains("<!-- page 1 -->"), "{}", doc.markdown);
     }

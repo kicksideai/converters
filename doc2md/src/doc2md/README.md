@@ -61,6 +61,29 @@ local document, err = doc2md.convert({ bytes = uploaded_bytes }, {
     comment on its own line where each PDF page (`<!-- page 3 -->`) and PPTX
     slide (`<!-- slide 3: Pricing -->`) starts. Markdown viewers do not show
     comments. Other formats carry no page boundaries and are unchanged.
+  - `pages`: optional `{ first, last }`, one-based and inclusive. Converts only
+    those pages, so a caller can convert a long PDF in bounded calls. `last`
+    past the final page converts through the final page; `first` past it fails
+    with `invalid_input`. A non-PDF document is one page.
+
+Converting consecutive page ranges and concatenating their `markdown` in page
+order yields exactly the whole-document `markdown`, page markers included;
+their `images` concatenate to the whole-document `images`. Each page renders
+independently of its neighbours, and the form fields section follows the last
+page.
+
+```lua
+local parts, first, page_count = {}, 1, nil
+repeat
+    local document, err = doc2md.convert({ bytes = uploaded_bytes },
+        { page_markers = true, pages = { first = first, last = first + 7 } })
+    if err ~= nil then return nil, err end
+    parts[#parts + 1] = document.markdown
+    page_count = document.page_count
+    first = first + 8
+until first > page_count
+local markdown = table.concat(parts)
+```
 
 `doc2md.new(runtime)` builds an instance with injected runtime dependencies
 (`{ funcs?, http_client? }`) for tests or a custom HTTP client. See
@@ -89,9 +112,9 @@ embedded or displayed.
 
 ## Page resources
 
-`doc2md.page_resources(request)` accepts the same `bytes` or `url` request and
-returns `[{ page, text_len, image_count }, ...]`, with one-based page
-numbers. For PDFs, `image_count` counts every direct image and Form resource
+`doc2md.page_resources(request [, options])` accepts the same `bytes` or `url`
+request and returns `[{ page, text_len, image_count }, ...]`, with one-based page
+numbers, for every page or for `options.pages = { first, last }`. For PDFs, `image_count` counts every direct image and Form resource
 before image-size filtering; a Form may contain further images. It helps callers
 decide whether extracted images cover a page or a composite render is needed.
 
@@ -108,8 +131,12 @@ Successful conversions return:
             data = raw_image_bytes,
         },
     },
+    page_count = 1,
 }
 ```
+
+`page_count` is the number of pages in the whole document, whatever range was
+converted; a non-PDF document has one page.
 
 `images` is always a table. It is empty when `extract_images` is false or when
 the document has no extractable images. Image data is returned as raw binary Lua

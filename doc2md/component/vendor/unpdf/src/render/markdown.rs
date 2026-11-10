@@ -62,50 +62,58 @@ impl MarkdownRenderer {
         // Add frontmatter if requested
         if self.options.include_frontmatter {
             output.push_str(&doc.metadata.to_yaml_frontmatter());
+            output.push('\n');
         }
+
+        // Each page is rendered and cleaned on its own, so a page's Markdown
+        // depends only on that page and its marker stays on its own line.
+        let cleanup = self
+            .options
+            .cleanup
+            .as_ref()
+            .map(|options| CleanupPipeline::new(options.clone()));
 
         // Render selected pages
         for page in &doc.pages {
             if self.options.page_selection.includes(page.number) {
-                self.render_page(&mut output, page);
+                self.render_page(&mut output, page, cleanup.as_ref());
             }
         }
 
         // Render form fields section
         if !doc.form_fields.is_empty() {
-            output.push_str("\n---\n\n");
-            output.push_str("## Form Fields\n\n");
+            let mut section = String::from("\n---\n\n## Form Fields\n\n");
             for field in &doc.form_fields {
                 let value = field.display_value();
                 if value.is_empty() {
-                    output.push_str(&format!("- **{}**: _(empty)_\n", field.name));
+                    section.push_str(&format!("- **{}**: _(empty)_\n", field.name));
                 } else {
-                    output.push_str(&format!("- **{}**: {}\n", field.name, value));
+                    section.push_str(&format!("- **{}**: {}\n", field.name, value));
                 }
             }
-        }
-
-        // Apply cleanup if configured
-        if let Some(ref cleanup_options) = self.options.cleanup {
-            let pipeline = CleanupPipeline::new(cleanup_options.clone());
-            output = pipeline.process(&output);
+            output.push_str(&clean(&section, cleanup.as_ref()));
         }
 
         Ok(output.trim().to_string())
     }
 
-    fn render_page(&mut self, output: &mut String, page: &Page) {
+    // A page renders as its marker line (when enabled) followed by its cleaned
+    // body; each part ends with one blank line.
+    fn render_page(&mut self, output: &mut String, page: &Page, cleanup: Option<&CleanupPipeline>) {
         if self.options.page_markers == PageMarkerStyle::Comment {
-            if !output.is_empty() && !output.ends_with("\n\n") {
-                output.push('\n');
-            }
             output.push_str(&format!("<!-- page {} -->\n\n", page.number));
         }
         if self.options.collect_stats {
             self.stats.add_page();
         }
+        let mut body = String::new();
         for block in &page.elements {
-            self.render_block(output, block);
+            self.render_block(&mut body, block);
+        }
+        let body = clean(&body, cleanup);
+        if !body.is_empty() {
+            output.push_str(&body);
+            output.push_str("\n\n");
         }
     }
 
@@ -430,6 +438,15 @@ fn to_roman(mut num: u32) -> String {
     result
 }
 
+/// Cleans one rendered unit (a page body or the form fields section); the
+/// result carries no leading or trailing whitespace.
+fn clean(text: &str, cleanup: Option<&CleanupPipeline>) -> String {
+    match cleanup {
+        Some(pipeline) => pipeline.process(text),
+        None => text.trim().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,6 +610,48 @@ mod tests {
             !result.contains("<!-- page 3 -->"),
             "page 3 marker must be absent when filtered"
         );
+    }
+
+    fn sentence_pages() -> Document {
+        let mut doc = Document::new();
+        for i in 1..=4u32 {
+            let mut page = Page::letter(i);
+            page.add_paragraph(Paragraph::heading(format!("Section {}", i), 1));
+            page.add_paragraph(Paragraph::with_text(format!("Text of page {} ends here.", i)));
+            if i % 2 == 1 {
+                page.add_paragraph(Paragraph::with_text("\u{2022}"));
+            }
+            doc.add_page(page);
+        }
+        doc
+    }
+
+    #[test]
+    fn test_page_markers_stay_on_their_own_line_after_any_page_ending() {
+        let options = RenderOptions::new().with_page_markers(PageMarkerStyle::Comment);
+        let result = to_markdown(&sentence_pages(), &options).unwrap();
+        for i in 1..=4 {
+            let marker = format!("<!-- page {} -->", i);
+            assert!(
+                result.lines().any(|line| line == marker),
+                "{} is not on its own line in:\n{}",
+                marker,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_pages_render_independently_of_their_neighbours() {
+        let doc = sentence_pages();
+        for markers in [PageMarkerStyle::Comment, PageMarkerStyle::None] {
+            let options = RenderOptions::new().with_page_markers(markers);
+            let whole = to_markdown(&doc, &options).unwrap();
+            let pages: Vec<String> = (1..=4)
+                .map(|i| to_markdown(&doc, &options.clone().with_page_list(vec![i])).unwrap())
+                .collect();
+            assert_eq!(pages.join("\n\n"), whole);
+        }
     }
 
     #[test]

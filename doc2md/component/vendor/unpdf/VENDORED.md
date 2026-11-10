@@ -63,4 +63,21 @@ holds; `test_decode_ascii85_rejects_adobe_opening_wrapper_by_name` asserts the r
 names the wrapper across payload lengths, `z` payloads, and whitespace-separated and
 whitespace-prefixed wrappers.
 
+### 4. Page-Isolated Markdown Rendering (`src/render/markdown.rs`)
+
+`MarkdownRenderer::render_internal` rendered every selected page into one
+string and ran the cleanup pipeline over the whole document. Cleanup rules
+match across page boundaries: `merge_list_markers` joined a page that ends in
+a bullet with the next page's `<!-- page N -->` marker (`• <!-- page 4 -->`),
+so the marker was no longer a line of its own, and sentence merging removed the
+blank line before markers. A page's Markdown depended on its neighbours, so a
+page range could not be rendered on its own.
+
+Each selected page is now rendered and cleaned on its own and emitted as its
+marker line (when enabled) and its cleaned body, each followed by one blank
+line; the form fields section is cleaned as its own unit after the pages.
+Rendering pages one at a time and joining the results with a blank line yields
+the whole-document output. `test_page_markers_stay_on_their_own_line_after_any_page_ending`
+and `test_pages_render_independently_of_their_neighbours` hold this.
+
 No other unpdf sources are modified.
