@@ -6,6 +6,7 @@ mod escher;
 mod markdown;
 mod metafile;
 mod ole;
+mod pdf_image;
 mod ppt;
 mod rtf;
 mod sheet;
@@ -100,81 +101,9 @@ fn base_id(reference: &str) -> &str {
     }
 }
 
-fn encode_png(samples: &[u8], width: u32, height: u32, channels: usize) -> Option<Vec<u8>> {
-    let color = match channels {
-        1 => png::ColorType::Grayscale,
-        3 => png::ColorType::Rgb,
-        _ => return None,
-    };
-    let mut out = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut out, width, height);
-        encoder.set_color(color);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().ok()?;
-        writer.write_image_data(samples).ok()?;
-    }
-    Some(out)
-}
-
-fn cmyk_to_rgb(samples: &[u8]) -> Vec<u8> {
-    let mut rgb = Vec::with_capacity(samples.len() / 4 * 3);
-    for chunk in samples.chunks_exact(4) {
-        let (c, m, y, k) = (
-            chunk[0] as u32,
-            chunk[1] as u32,
-            chunk[2] as u32,
-            chunk[3] as u32,
-        );
-        rgb.push(((255 - c) * (255 - k) / 255) as u8);
-        rgb.push(((255 - m) * (255 - k) / 255) as u8);
-        rgb.push(((255 - y) * (255 - k) / 255) as u8);
-    }
-    rgb
-}
-
-// Produce a viewable file (bytes, extension) from a PDF image resource. JPEG/PNG
-// streams pass through; raw DeviceRGB/DeviceGray/DeviceCMYK 8-bit sample buffers
-// are wrapped into a PNG; anything else is returned as-is.
-fn pdf_image_file(resource: &unpdf::Resource) -> (Vec<u8>, &'static str) {
-    match resource.mime_type.as_str() {
-        "image/jpeg" => return (resource.data.clone(), "jpg"),
-        "image/png" => return (resource.data.clone(), "png"),
-        "image/gif" => return (resource.data.clone(), "gif"),
-        "image/tiff" => return (resource.data.clone(), "tiff"),
-        _ => {}
-    }
-
-    if let (Some(width), Some(height), Some(8)) =
-        (resource.width, resource.height, resource.bits_per_component)
-    {
-        let pixels = width as usize * height as usize;
-        let space = resource.color_space.as_deref().unwrap_or("");
-        let (samples, channels) = match space {
-            "DeviceRGB" | "RGB" | "CalRGB" if resource.data.len() == pixels * 3 => {
-                (resource.data.clone(), 3)
-            }
-            "DeviceGray" | "Gray" | "CalGray" if resource.data.len() == pixels => {
-                (resource.data.clone(), 1)
-            }
-            "DeviceCMYK" | "CMYK" if resource.data.len() == pixels * 4 => {
-                (cmyk_to_rgb(&resource.data), 3)
-            }
-            _ => (Vec::new(), 0),
-        };
-        if channels != 0 {
-            if let Some(png) = encode_png(&samples, width, height, channels) {
-                return (png, "png");
-            }
-        }
-    }
-
-    (resource.data.clone(), "bin")
-}
-
 // Replace unpdf's anonymous `<!-- [alt] -->` block-image placeholders, in document
 // order, with linked `![alt](name)` references to the extracted image files.
-fn link_placeholders(markdown: &str, ordered: &[(String, String)]) -> String {
+fn link_placeholders(markdown: &str, ordered: &[Option<String>]) -> String {
     let mut result = String::with_capacity(markdown.len());
     let mut rest = markdown;
     let mut index = 0;
@@ -187,8 +116,8 @@ fn link_placeholders(markdown: &str, ordered: &[(String, String)]) -> String {
         let end = after_open + close_rel + "] -->".len();
         result.push_str(&rest[..open]);
         match ordered.get(index) {
-            Some((_, name)) => result.push_str(&format!("![{}]({})", alt, name)),
-            None => result.push_str(&rest[open..end]),
+            Some(Some(name)) => result.push_str(&format!("![{}]({})", alt, name)),
+            _ => result.push_str(&rest[open..end]),
         }
         rest = &rest[end..];
         index += 1;
@@ -252,27 +181,27 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
     let mut keys: Vec<&String> = doc.resources.keys().collect();
     keys.sort_by_key(|id| (doc.resources[*id].page, *id));
 
-    let mut files: HashMap<String, (String, Vec<u8>)> = HashMap::new();
+    let mut files: HashMap<String, String> = HashMap::new();
     let mut images: Vec<types::Image> = Vec::new();
     for id in &keys {
         let resource = &doc.resources[*id];
         if !resource.is_image() {
             continue;
         }
-        let (bytes, ext) = pdf_image_file(resource);
+        let Some((bytes, ext)) = pdf_image::image_file(resource) else {
+            continue;
+        };
         let name = format!("{}.{}", sanitize(id), ext);
-        files.insert((*id).clone(), (name.clone(), bytes.clone()));
+        files.insert((*id).clone(), name.clone());
         images.push(types::Image { name, data: bytes, page: resource.page });
     }
 
-    let mut ordered: Vec<(String, String)> = Vec::new();
+    let mut ordered: Vec<Option<String>> = Vec::new();
     for page in &doc.pages {
         for block in &page.elements {
             if let unpdf::Block::Image { resource_id, .. } = block {
                 let key = base_id(resource_id);
-                if let Some((name, _)) = files.get(key) {
-                    ordered.push((key.to_string(), name.clone()));
-                }
+                ordered.push(files.get(key).cloned());
             }
         }
     }
@@ -673,78 +602,6 @@ mod tests {
     }
 
     #[test]
-    fn cmyk_to_rgb_mid_range_values() {
-        // R=(255-100)*(255-20)/255=142, G=(255-50)*235/255=188, B=(255-10)*235/255=225
-        assert_eq!(cmyk_to_rgb(&[100, 50, 10, 20]), vec![142, 188, 225]);
-    }
-
-    #[test]
-    fn encode_png_supports_grayscale_and_rgb() {
-        assert_eq!(
-            &encode_png(&[128], 1, 1, 1).unwrap()[0..8],
-            b"\x89PNG\r\n\x1a\n"
-        );
-        assert_eq!(
-            &encode_png(&[1, 2, 3], 1, 1, 3).unwrap()[0..8],
-            b"\x89PNG\r\n\x1a\n"
-        );
-        assert!(encode_png(&[0, 0], 1, 1, 2).is_none());
-    }
-
-    #[test]
-    fn pdf_image_file_passthrough_and_raw_samples() {
-        use unpdf::Resource;
-        assert_eq!(
-            pdf_image_file(&Resource::image(b"j".to_vec(), "image/jpeg")).1,
-            "jpg"
-        );
-        assert_eq!(
-            pdf_image_file(&Resource::image(b"p".to_vec(), "image/png")).1,
-            "png"
-        );
-        assert_eq!(
-            pdf_image_file(&Resource::image(b"g".to_vec(), "image/gif")).1,
-            "gif"
-        );
-        assert_eq!(
-            pdf_image_file(&Resource::image(b"t".to_vec(), "image/tiff")).1,
-            "tiff"
-        );
-
-        let rgb = Resource::image(vec![10, 20, 30], "")
-            .with_dimensions(1, 1)
-            .with_color_space("DeviceRGB")
-            .with_bits_per_component(8);
-        let (bytes, ext) = pdf_image_file(&rgb);
-        assert_eq!(ext, "png");
-        assert_eq!(&bytes[0..8], b"\x89PNG\r\n\x1a\n");
-
-        let gray = Resource::image(vec![128], "")
-            .with_dimensions(1, 1)
-            .with_color_space("DeviceGray")
-            .with_bits_per_component(8);
-        assert_eq!(pdf_image_file(&gray).1, "png");
-
-        let cmyk = Resource::image(vec![0, 0, 0, 0], "")
-            .with_dimensions(1, 1)
-            .with_color_space("DeviceCMYK")
-            .with_bits_per_component(8);
-        assert_eq!(pdf_image_file(&cmyk).1, "png");
-
-        // unknown mime, no dimensions -> raw bytes
-        assert_eq!(
-            pdf_image_file(&Resource::image(vec![1, 2, 3], "x/y")).1,
-            "bin"
-        );
-        // dimensions present but byte count mismatched -> raw bytes
-        let bad = Resource::image(vec![1, 2], "")
-            .with_dimensions(5, 5)
-            .with_color_space("DeviceRGB")
-            .with_bits_per_component(8);
-        assert_eq!(pdf_image_file(&bad).1, "bin");
-    }
-
-    #[test]
     fn guest_convert_accepts_raw_bytes() {
         let doc = <Component as Guest>::convert(request(
             include_bytes!("../tests/assets/doc.doc"),
@@ -923,23 +780,9 @@ mod tests {
     }
 
     #[test]
-    fn cmyk_to_rgb_converts_known_values() {
-        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 0]), vec![255, 255, 255]); // no ink => white
-        assert_eq!(cmyk_to_rgb(&[255, 0, 0, 0]), vec![0, 255, 255]); // full cyan
-        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 255]), vec![0, 0, 0]); // full black
-    }
-
-    #[test]
-    fn encode_png_emits_valid_png_and_rejects_bad_channels() {
-        let png = encode_png(&[10, 20, 30], 1, 1, 3).unwrap();
-        assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
-        assert!(encode_png(&[0, 0], 1, 1, 2).is_none()); // unsupported channel count
-    }
-
-    #[test]
     fn link_placeholders_links_in_order_and_keeps_unmatched() {
         let md = "a <!-- [Fig 1] --> b <!-- [Fig 2] --> c";
-        let ordered = vec![("k1".to_string(), "image1.png".to_string())];
+        let ordered = vec![Some("image1.png".to_string())];
         assert_eq!(
             link_placeholders(md, &ordered),
             "a ![Fig 1](image1.png) b <!-- [Fig 2] --> c"
@@ -1218,5 +1061,36 @@ mod tests {
         })
         .unwrap();
         assert!(doc.markdown.contains("<!-- page 1 -->"), "{}", doc.markdown);
+    }
+}
+
+#[cfg(test)]
+mod test_allocations {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    thread_local! {
+        static ENABLED: Cell<bool> = const { Cell::new(false) };
+        static COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+    struct CountingAllocator;
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if ENABLED.try_with(Cell::get).unwrap_or(false) { COUNT.with(|n| n.set(n.get() + 1)); }
+            System.alloc(layout)
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { System.dealloc(ptr, layout) }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            if ENABLED.try_with(Cell::get).unwrap_or(false) { COUNT.with(|n| n.set(n.get() + 1)); }
+            System.realloc(ptr, layout, size)
+        }
+    }
+    pub(crate) fn count<T>(f: impl FnOnce() -> T) -> (usize, T) {
+        COUNT.with(|n| n.set(0));
+        ENABLED.with(|enabled| enabled.set(true));
+        let result = f();
+        ENABLED.with(|enabled| enabled.set(false));
+        (COUNT.with(Cell::get), result)
     }
 }

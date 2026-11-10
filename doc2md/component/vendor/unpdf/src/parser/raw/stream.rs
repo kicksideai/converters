@@ -6,33 +6,54 @@ use std::io::Read;
 
 /// Decompress a PDF stream based on its Filter entry.
 /// Also applies predictor decoding from DecodeParms if present.
-pub fn decompress(stream: &PdfStream) -> Result<Vec<u8>> {
-    let filter = dict_get(&stream.dict, b"Filter");
-
-    let decompressed = match filter {
-        None => return Ok(stream.raw_data.clone()),
-        Some(PdfObject::Name(name)) => decompress_single(name, &stream.raw_data)?,
-        Some(PdfObject::Array(filters)) => {
-            let mut data = stream.raw_data.clone();
-            for f in filters {
-                if let Some(name) = f.as_name() {
-                    data = decompress_single(name, &data)?;
-                }
-            }
-            data
-        }
-        _ => return Ok(stream.raw_data.clone()),
+pub fn decompress<'a>(
+    stream: &'a PdfStream,
+    resolve: impl Fn(&'a PdfObject) -> &'a PdfObject,
+) -> Result<Vec<u8>> {
+    let Some(filter) = dict_get(&stream.dict, b"Filter").map(&resolve) else {
+        return Ok(stream.raw_data.clone());
     };
-
-    // Apply predictor decoding if DecodeParms is present
-    let decode_parms = dict_get(&stream.dict, b"DecodeParms");
-    if let Some(parms) = decode_parms {
-        if let Some(parms_dict) = parms.as_dict() {
-            return apply_predictor(parms_dict, &decompressed);
+    let filters = match filter {
+        PdfObject::Name(_) => std::slice::from_ref(filter),
+        PdfObject::Array(filters) => filters.as_slice(),
+        _ => {
+            return Err(Error::PdfParse(
+                "invalid or unresolved stream filter".into(),
+            ))
+        }
+    };
+    let parms = dict_get(&stream.dict, b"DecodeParms").map(&resolve);
+    match parms {
+        None | Some(PdfObject::Null) => (),
+        Some(PdfObject::Dict(_)) if filters.len() == 1 => (),
+        Some(PdfObject::Array(items)) if items.len() == filters.len() => (),
+        _ => {
+            return Err(Error::PdfParse(
+                "invalid or unresolved decode parameters".into(),
+            ))
         }
     }
-
-    Ok(decompressed)
+    let mut data = stream.raw_data.clone();
+    for (i, filter) in filters.iter().enumerate() {
+        let name = resolve(filter)
+            .as_name()
+            .ok_or_else(|| Error::PdfParse("invalid or unresolved stream filter".into()))?;
+        data = decompress_single(name, &data)?;
+        let parameters = match parms {
+            Some(PdfObject::Array(items)) => Some(resolve(&items[i])),
+            other => other,
+        };
+        match parameters {
+            None | Some(PdfObject::Null) => (),
+            Some(PdfObject::Dict(dict)) => data = apply_predictor(dict, &data, &resolve)?,
+            _ => {
+                return Err(Error::PdfParse(
+                    "invalid or unresolved decode parameters".into(),
+                ))
+            }
+        }
+    }
+    Ok(data)
 }
 
 fn decompress_single(filter_name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
@@ -138,9 +159,13 @@ fn try_partial_read<R: Read>(mut reader: R) -> Vec<u8> {
 /// PDF supports two families of predictors:
 /// - TIFF Predictor 2: horizontal differencing
 /// - PNG Predictors 10-15: PNG filter methods (None, Sub, Up, Average, Paeth, Optimum)
-fn apply_predictor(parms: &PdfDict, data: &[u8]) -> Result<Vec<u8>> {
+fn apply_predictor<'a>(
+    parms: &'a PdfDict,
+    data: &[u8],
+    resolve: &impl Fn(&'a PdfObject) -> &'a PdfObject,
+) -> Result<Vec<u8>> {
     let predictor = dict_get(parms, b"Predictor")
-        .and_then(|o| o.as_i64())
+        .and_then(|o| resolve(o).as_i64())
         .unwrap_or(1);
 
     // Predictor 1 = no prediction
@@ -149,15 +174,15 @@ fn apply_predictor(parms: &PdfDict, data: &[u8]) -> Result<Vec<u8>> {
     }
 
     let columns = dict_get(parms, b"Columns")
-        .and_then(|o| o.as_i64())
+        .and_then(|o| resolve(o).as_i64())
         .unwrap_or(1) as usize;
 
     let colors = dict_get(parms, b"Colors")
-        .and_then(|o| o.as_i64())
+        .and_then(|o| resolve(o).as_i64())
         .unwrap_or(1) as usize;
 
     let bits_per_component = dict_get(parms, b"BitsPerComponent")
-        .and_then(|o| o.as_i64())
+        .and_then(|o| resolve(o).as_i64())
         .unwrap_or(8) as usize;
 
     if predictor == 2 {
@@ -488,7 +513,7 @@ mod tests {
             dict: HashMap::new(),
             raw_data: b"Hello World".to_vec(),
         };
-        let result = decompress(&stream).unwrap();
+        let result = decompress(&stream, |o| o).unwrap();
         assert_eq!(result, b"Hello World");
     }
 
@@ -509,7 +534,7 @@ mod tests {
             dict,
             raw_data: compressed,
         };
-        let result = decompress(&stream).unwrap();
+        let result = decompress(&stream, |o| o).unwrap();
         assert_eq!(result, b"Hello Compressed");
     }
 
@@ -527,7 +552,7 @@ mod tests {
             dict,
             raw_data: vec![1, 2, 3],
         };
-        assert!(decompress(&stream).is_err());
+        assert!(decompress(&stream, |o| o).is_err());
     }
 
     #[test]
@@ -706,12 +731,15 @@ mod tests {
     #[test]
     fn test_decompress_ascii85() {
         let mut dict = HashMap::new();
-        dict.insert(b"Filter".to_vec(), PdfObject::Name(b"ASCII85Decode".to_vec()));
+        dict.insert(
+            b"Filter".to_vec(),
+            PdfObject::Name(b"ASCII85Decode".to_vec()),
+        );
         let stream = PdfStream {
             dict,
             raw_data: b"87cURDZ~>".to_vec(),
         };
-        let result = decompress(&stream).unwrap();
+        let result = decompress(&stream, |o| o).unwrap();
         assert_eq!(result, b"Hello");
     }
 
@@ -723,7 +751,7 @@ mod tests {
             dict,
             raw_data: b"87cURDZ~>".to_vec(),
         };
-        let result = decompress(&stream).unwrap();
+        let result = decompress(&stream, |o| o).unwrap();
         assert_eq!(result, b"Hello");
     }
 
@@ -742,7 +770,7 @@ mod tests {
             dict,
             raw_data: fixture_stream.to_vec(),
         };
-        let result = decompress(&stream).unwrap();
+        let result = decompress(&stream, |o| o).unwrap();
         assert!(result.starts_with(b"1 0 0 1 0 0 cm"));
         assert!(result
             .windows(b"PUBLIC ASCII85 REGRESSION".len())
