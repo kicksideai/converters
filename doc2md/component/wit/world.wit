@@ -47,13 +47,17 @@ world converter {
         image-count: u32,
     }
 
-    // Converts the whole document, or only the given pages. Converting
-    // consecutive ranges and concatenating their Markdown in page order yields
-    // exactly the whole-document Markdown; images keep the whole-document order.
-    export convert: func(request: conversion-request, pages: option<page-range>) -> result<converted-document, conversion-error>;
+    export convert: func(request: conversion-request) -> result<converted-document, conversion-error>;
+
+    // Converts only the given pages. Converting consecutive ranges and
+    // concatenating their Markdown in page order yields exactly the
+    // whole-document Markdown; their images concatenate to its images.
+    export convert-range: func(request: conversion-request, pages: page-range) -> result<converted-document, conversion-error>;
 
     // Returns one entry per page with its extracted-text length and image-resource
-    // count, for every page or for the given range. PDFs report real pages;
-    // other formats report a single logical page.
-    export page-resources: func(bytes: list<u8>, pages: option<page-range>) -> result<list<page-info>, conversion-error>;
+    // count. PDFs report real pages; other formats report a single logical page.
+    export page-resources: func(bytes: list<u8>) -> result<list<page-info>, conversion-error>;
+
+    // page-resources for the given pages only.
+    export page-resources-range: func(bytes: list<u8>, pages: page-range) -> result<list<page-info>, conversion-error>;
 }

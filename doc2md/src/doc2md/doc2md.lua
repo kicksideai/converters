@@ -50,7 +50,9 @@ type Runtime = {
 
 local PREFIX = "kickside.convert.doc2md: "
 local CONVERTER = "kickside.convert.doc2md:converter"
+local RANGE_CONVERTER = "kickside.convert.doc2md:range_converter"
 local PAGE_RESOURCES = "kickside.convert.doc2md:page_resources"
+local RANGE_PAGE_RESOURCES = "kickside.convert.doc2md:range_page_resources"
 
 local MAX_INPUT_BYTES = 128 * 1024 * 1024
 local DOWNLOAD_TIMEOUT = "30s"
@@ -343,7 +345,12 @@ local function new(runtime: Runtime?): any
             },
         }
 
-        local result, call_err = funcs.call(CONVERTER, wasm_request, settings.pages)
+        local result, call_err
+        if settings.pages ~= nil then
+            result, call_err = funcs.call(RANGE_CONVERTER, wasm_request, settings.pages)
+        else
+            result, call_err = funcs.call(CONVERTER, wasm_request)
+        end
         if call_err ~= nil then
             return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
                 message = tostring(call_err), details = {code = "internal"}}) :: error)
@@ -402,7 +409,12 @@ local function new(runtime: Runtime?): any
                 message = PREFIX .. opt_err, details = {code = "invalid_input"}}) :: error)
         end
 
-        local result, call_err = funcs.call(PAGE_RESOURCES, blob, pages)
+        local result, call_err
+        if pages ~= nil then
+            result, call_err = funcs.call(RANGE_PAGE_RESOURCES, blob, pages)
+        else
+            result, call_err = funcs.call(PAGE_RESOURCES, blob)
+        end
         if call_err ~= nil then
             return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
                 message = tostring(call_err), details = {code = "internal"}}) :: error)

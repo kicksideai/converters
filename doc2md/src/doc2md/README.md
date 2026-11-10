@@ -149,6 +149,8 @@ The published `kickside.convert.doc2md` namespace includes:
 - `kickside.convert.doc2md:doc2md`: Lua SDK.
 - `kickside.convert.doc2md:converter`: WebAssembly converter function.
 - `kickside.convert.doc2md:page_resources`: per-page text and image-resource scan.
+- `kickside.convert.doc2md:range_converter`: WebAssembly converter for one page range.
+- `kickside.convert.doc2md:range_page_resources`: page resource scan for one page range.
 - `kickside.convert.doc2md:assets`: embedded filesystem for `doc2md.wasm`.
 
 Tests, fixtures, and load harnesses live under `app.env:**`. That namespace is

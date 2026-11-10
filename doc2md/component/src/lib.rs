@@ -648,22 +648,37 @@ fn collect_page_resources(
     }])
 }
 
+fn convert_request(
+    request: ConversionRequest,
+    pages: Option<PageRange>,
+) -> Result<ConvertedDocument, ConversionError> {
+    let settings = Settings::from(request.options);
+    let mut budget = Budget::root();
+    dispatch_pages(&request.bytes, settings, pages, &mut budget)
+        .map(|(converted, page_count)| converted_to_document(converted, page_count))
+}
+
 impl Guest for Component {
-    fn convert(
-        request: ConversionRequest,
-        pages: Option<PageRange>,
-    ) -> Result<ConvertedDocument, ConversionError> {
-        let settings = Settings::from(request.options);
-        let mut budget = Budget::root();
-        dispatch_pages(&request.bytes, settings, pages, &mut budget)
-            .map(|(converted, page_count)| converted_to_document(converted, page_count))
+    fn convert(request: ConversionRequest) -> Result<ConvertedDocument, ConversionError> {
+        convert_request(request, None)
     }
 
-    fn page_resources(
+    fn convert_range(
+        request: ConversionRequest,
+        pages: PageRange,
+    ) -> Result<ConvertedDocument, ConversionError> {
+        convert_request(request, Some(pages))
+    }
+
+    fn page_resources(bytes: Vec<u8>) -> Result<Vec<PageInfo>, ConversionError> {
+        collect_page_resources(&bytes, None)
+    }
+
+    fn page_resources_range(
         bytes: Vec<u8>,
-        pages: Option<PageRange>,
+        pages: PageRange,
     ) -> Result<Vec<PageInfo>, ConversionError> {
-        collect_page_resources(&bytes, pages)
+        collect_page_resources(&bytes, Some(pages))
     }
 }
 
@@ -834,27 +849,25 @@ mod tests {
 
     #[test]
     fn guest_convert_accepts_raw_bytes() {
-        let doc = <Component as Guest>::convert(
-            request(include_bytes!("../tests/assets/doc.doc"), false),
-            None,
-        )
+        let doc = <Component as Guest>::convert(request(
+            include_bytes!("../tests/assets/doc.doc"),
+            false,
+        ))
         .unwrap();
         assert!(doc.markdown.contains("Hello from DOC legacy"));
         assert!(doc.images.is_empty());
         // Plain text now passes through; genuinely binary, unrecognized bytes are rejected.
-        let text = <Component as Guest>::convert(request(b"not a document", false), None).unwrap();
+        let text = <Component as Guest>::convert(request(b"not a document", false)).unwrap();
         assert_eq!(text.markdown, "not a document");
-        assert!(
-            <Component as Guest>::convert(request(&[0x00, 0xFF, 0x00, 0x01], false), None).is_err()
-        );
+        assert!(<Component as Guest>::convert(request(&[0x00, 0xFF, 0x00, 0x01], false)).is_err());
     }
 
     #[test]
     fn convert_archive_expands_entries_under_headings() {
-        let doc = <Component as Guest>::convert(
-            request(include_bytes!("../tests/assets/archive.zip"), false),
-            None,
-        )
+        let doc = <Component as Guest>::convert(request(
+            include_bytes!("../tests/assets/archive.zip"),
+            false,
+        ))
         .unwrap();
         assert!(doc.markdown.contains("## notes.md"));
         assert!(doc.markdown.contains("Hello from ZIP entry"));
@@ -866,10 +879,10 @@ mod tests {
 
     #[test]
     fn convert_archive_reports_skipped_unsupported_entries() {
-        let doc = <Component as Guest>::convert(
-            request(include_bytes!("../tests/assets/archive_skip.zip"), false),
-            None,
-        )
+        let doc = <Component as Guest>::convert(request(
+            include_bytes!("../tests/assets/archive_skip.zip"),
+            false,
+        ))
         .unwrap();
         assert!(doc.markdown.contains("## a.md"));
         // Exactly one unsupported entry -> singular footer naming it.
@@ -883,10 +896,10 @@ mod tests {
 
     #[test]
     fn convert_archive_recurses_into_nested_archives() {
-        let doc = <Component as Guest>::convert(
-            request(include_bytes!("../tests/assets/archive_nested.zip"), false),
-            None,
-        )
+        let doc = <Component as Guest>::convert(request(
+            include_bytes!("../tests/assets/archive_nested.zip"),
+            false,
+        ))
         .unwrap();
         assert!(doc.markdown.contains("## archive.zip"));
         assert!(doc.markdown.contains("Hello from ZIP entry"));
@@ -898,10 +911,10 @@ mod tests {
         // bomb_oversized.zip declares a 70 MiB member (> 64 MiB per-entry cap) that
         // compresses to a few KB. The good member must still convert; the bomb is
         // skipped by the size guard and never fully decompressed.
-        let doc = <Component as Guest>::convert(
-            request(include_bytes!("../tests/assets/bomb_oversized.zip"), false),
-            None,
-        )
+        let doc = <Component as Guest>::convert(request(
+            include_bytes!("../tests/assets/bomb_oversized.zip"),
+            false,
+        ))
         .unwrap();
         assert!(doc.markdown.contains("## good.md"));
         assert!(doc.markdown.contains("real content"));
@@ -916,10 +929,10 @@ mod tests {
     fn zip_bomb_high_ratio_member_is_skipped() {
         // ratio.bin is 50 MiB (under the 64 MiB cap and the 128 MiB budget), so only
         // the compression-ratio guard (ratio 1030 > 1000) can reject it.
-        let doc = <Component as Guest>::convert(
-            request(include_bytes!("../tests/assets/bomb_ratio.zip"), false),
-            None,
-        )
+        let doc = <Component as Guest>::convert(request(
+            include_bytes!("../tests/assets/bomb_ratio.zip"),
+            false,
+        ))
         .unwrap();
         assert!(doc.markdown.contains("## ok.md"));
         assert!(
@@ -934,10 +947,10 @@ mod tests {
     fn zip_with_too_many_entries_is_capped() {
         // many_entries.zip holds 4097 members; only MAX_ENTRIES are iterated and the
         // overflow is reported rather than silently ignored.
-        let doc = <Component as Guest>::convert(
-            request(include_bytes!("../tests/assets/many_entries.zip"), false),
-            None,
-        )
+        let doc = <Component as Guest>::convert(request(
+            include_bytes!("../tests/assets/many_entries.zip"),
+            false,
+        ))
         .unwrap();
         assert!(
             doc.markdown
@@ -1156,8 +1169,7 @@ mod tests {
 
     #[test]
     fn page_resources_reports_text_pages_for_pdf() {
-        let pages =
-            collect_page_resources(include_bytes!("../tests/assets/sample.pdf"), None).unwrap();
+        let pages = collect_page_resources(include_bytes!("../tests/assets/sample.pdf"), None).unwrap();
         assert!(!pages.is_empty(), "expected at least one page");
         assert_eq!(pages[0].page, 1);
         assert!(
@@ -1169,8 +1181,7 @@ mod tests {
 
     #[test]
     fn page_resources_reports_single_page_for_non_pdf() {
-        let pages =
-            collect_page_resources(include_bytes!("../tests/assets/docx.docx"), None).unwrap();
+        let pages = collect_page_resources(include_bytes!("../tests/assets/docx.docx"), None).unwrap();
         assert_eq!(
             pages.len(),
             1,
@@ -1259,13 +1270,8 @@ mod tests {
 
     #[test]
     fn convert_pdf_marks_each_page_when_page_markers_are_requested() {
-        let doc = convert_pdf(
-            include_bytes!("../tests/assets/sample.pdf"),
-            located(false),
-            None,
-        )
-        .unwrap()
-        .0;
+        let doc =
+            convert_pdf(include_bytes!("../tests/assets/sample.pdf"), located(false), None).unwrap().0;
         assert!(
             doc.markdown.starts_with("<!-- page 1 -->"),
             "{}",
@@ -1276,13 +1282,7 @@ mod tests {
 
     #[test]
     fn convert_pdf_keeps_page_markers_when_images_are_linked() {
-        let doc = convert_pdf(
-            include_bytes!("../tests/assets/sample.pdf"),
-            located(true),
-            None,
-        )
-        .unwrap()
-        .0;
+        let doc = convert_pdf(include_bytes!("../tests/assets/sample.pdf"), located(true), None).unwrap().0;
         assert!(doc.markdown.contains("<!-- page 1 -->"), "{}", doc.markdown);
     }
 
@@ -1316,18 +1316,57 @@ mod tests {
         assert!(!plain.markdown.contains("<!-- slide"), "{}", plain.markdown);
     }
 
+    fn range_error(bytes: &[u8], first: u32, last: u32) -> u8 {
+        <Component as Guest>::convert_range(request(bytes, false), PageRange { first, last })
+            .err()
+            .expect("range is rejected")
+            .code
+    }
+
+    #[test]
+    fn exported_convert_range_slices_the_document_and_reports_its_page_count() {
+        let pdf = include_bytes!("../tests/assets/sample.pdf");
+        let whole = <Component as Guest>::convert(request(pdf, false)).unwrap();
+        assert!(whole.page_count >= 1);
+        let ranged = <Component as Guest>::convert_range(
+            request(pdf, false),
+            PageRange { first: 1, last: whole.page_count + 5 },
+        )
+        .unwrap();
+        assert_eq!(ranged.markdown, whole.markdown);
+        assert_eq!(ranged.page_count, whole.page_count);
+        assert_eq!(range_error(pdf, 0, 1), ERR_RANGE);
+        assert_eq!(range_error(pdf, 2, 1), ERR_RANGE);
+        assert_eq!(range_error(pdf, whole.page_count + 1, whole.page_count + 1), ERR_RANGE);
+    }
+
+    #[test]
+    fn exported_convert_range_treats_other_formats_as_one_page() {
+        let docx = include_bytes!("../tests/assets/docx.docx");
+        let whole = <Component as Guest>::convert(request(docx, false)).unwrap();
+        assert_eq!(whole.page_count, 1);
+        let ranged =
+            <Component as Guest>::convert_range(request(docx, false), PageRange { first: 1, last: 3 })
+                .unwrap();
+        assert_eq!(ranged.markdown, whole.markdown);
+        assert_eq!(range_error(docx, 2, 2), ERR_RANGE);
+        let pages = <Component as Guest>::page_resources_range(
+            docx.to_vec(),
+            PageRange { first: 1, last: 1 },
+        )
+        .unwrap();
+        assert_eq!(pages.len(), 1);
+    }
+
     #[test]
     fn exported_convert_honours_the_page_markers_option() {
-        let doc = <Component as Guest>::convert(
-            ConversionRequest {
-                bytes: include_bytes!("../tests/assets/sample.pdf").to_vec(),
-                options: ConversionOptions {
-                    extract_images: false,
-                    page_markers: true,
-                },
+        let doc = <Component as Guest>::convert(ConversionRequest {
+            bytes: include_bytes!("../tests/assets/sample.pdf").to_vec(),
+            options: ConversionOptions {
+                extract_images: false,
+                page_markers: true,
             },
-            None,
-        )
+        })
         .unwrap();
         assert!(doc.markdown.contains("<!-- page 1 -->"), "{}", doc.markdown);
     }

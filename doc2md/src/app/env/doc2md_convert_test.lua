@@ -215,15 +215,17 @@ local function define()
         end)
 
         test.it("passes the page range to the component", function()
-            local seen
-            local mod = fake(function(_, _, pages) seen = pages; return { ok = { markdown = "", images = {}, ["page-count"] = 3 } }, nil end)
+            local entry, seen
+            local mod = fake(function(id, _, pages) entry, seen = id, pages; return { ok = { markdown = "", images = {}, ["page-count"] = 3 } }, nil end)
             local document, err = mod.convert({ bytes = fixtures.pdf }, { pages = { first = 2, last = 3 } })
             test.is_nil(err)
+            test.eq(entry, "kickside.convert.doc2md:range_converter")
             test.eq(seen.first, 2)
             test.eq(seen.last, 3)
             test.eq(document.page_count, 3)
             local _, whole_err = mod.convert({ bytes = fixtures.pdf })
             test.is_nil(whole_err)
+            test.eq(entry, "kickside.convert.doc2md:converter")
             test.is_nil(seen)
         end)
 
