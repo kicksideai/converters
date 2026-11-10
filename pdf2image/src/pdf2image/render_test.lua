@@ -500,6 +500,29 @@ local function define()
             test.eq(png, "\137PNG raw")
         end)
 
+        test.it("renders a page batch with one component call per page", function()
+            -- The component's per-call kill deadline then bounds one page's work,
+            -- whatever number of pages the caller batches.
+            local calls = {}
+            local mod = fake(function(target, _, pages)
+                if target == "kickside.convert.pdf2image:pages" then
+                    return { ok = 5 }, nil
+                end
+                calls[#calls + 1] = pages
+                local images = {}
+                for i, page in ipairs(pages) do images[i] = "image-" .. tostring(page) end
+                return { ok = images }, nil
+            end)
+            local doc = mod.open({ bytes = fixtures.text_pdf })
+            local images, err = doc.render({ pages = { 2, 4, 5 } })
+            test.is_nil(err)
+            test.eq(#calls, 3)
+            for _, pages in ipairs(calls) do test.eq(#pages, 1) end
+            test.eq(images[1], "image-1")
+            test.eq(images[2], "image-3")
+            test.eq(images[3], "image-4")
+        end)
+
         test.it("passes through a component render error", function()
             local mod = fake(function(target)
                 if target == "kickside.convert.pdf2image:pages" then

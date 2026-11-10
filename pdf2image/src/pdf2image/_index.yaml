@@ -54,7 +54,8 @@ entries:
     pool:
       type: lazy
       max_size: 4
-    # Per-call kill deadline for a hung render; each call is one page batch.
+    # Per-call kill deadline for a hung render; the Lua API renders one page per call,
+    # so the deadline bounds one page.
     # Overridable per deploy like pool.max_size.
     limits:
       max_execution_ms: 45000

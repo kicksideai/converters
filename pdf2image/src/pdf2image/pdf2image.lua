@@ -296,12 +296,10 @@ local function new(runtime: Runtime?): any
                 message = PREFIX .. "unexpected page count result", details = {code = "internal"}}) :: error)
         end
 
-        local function render_pages(zero_based_pages: { number }, options: any): (any, error?)
-            if #zero_based_pages == 0 then
-                return {}, nil
-            end
-
-            local res, call_err = funcs.call(RENDER, blob, zero_based_pages, options)
+        -- Render one page per component call: the component's per-call kill
+        -- deadline bounds one page's work, whatever number of pages is requested.
+        local function render_page(zero_based_page: number, options: any): (string?, error?)
+            local res, call_err = funcs.call(RENDER, blob, { zero_based_page }, options)
             if call_err ~= nil then
                 return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
                 message = tostring(call_err), details = {code = "internal"}}) :: error)
@@ -319,20 +317,22 @@ local function new(runtime: Runtime?): any
             end
 
             local rendered = res.ok
-            if type(rendered) ~= "table" then
+            if type(rendered) ~= "table" or #rendered ~= 1 or type(rendered[1]) ~= "string" then
                 return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
                 message = PREFIX .. "unexpected render result", details = {code = "internal"}}) :: error)
             end
 
-            local images = {}
-            for i = 1, #rendered do
-                local item = rendered[i]
-                if type(item) ~= "string" then
-                    return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
-                message = PREFIX .. "unexpected render result", details = {code = "internal"}}) :: error)
-                end
+            return rendered[1] :: string, nil
+        end
 
-                images[i] = item
+        local function render_pages(zero_based_pages: { number }, options: any): (any, error?)
+            local images = {}
+            for i = 1, #zero_based_pages do
+                local image, render_err = render_page(zero_based_pages[i], options)
+                if render_err ~= nil then
+                    return nil, render_err
+                end
+                images[i] = image
             end
 
             return images, nil
