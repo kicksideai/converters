@@ -31,6 +31,17 @@ end
 
 local function define()
     test.describe("doc2md.convert", function()
+        test.it("keeps page markers separate after a trailing bullet and an empty page", function()
+            local bytes = pdf_pages.pdf({0, 0, 0}, nil, nil, {string.char(149), "Next page fact"})
+            for _, images in ipairs({false, true}) do
+                local document, err = doc2md.convert({bytes = bytes}, {extract_images = images, page_markers = true})
+                test.is_nil(err)
+                test.eq(document.markdown, "<!-- page 1 -->\n\n<!-- page 2 -->\n\nNext page fact\n\n<!-- page 3 -->\n\n")
+                local markers = doc2md.markers(document.markdown)
+                test.eq(#markers, 3)
+                for page, marker in ipairs(markers) do test.eq(marker.number, page) end
+            end
+        end)
         test.it("returns PDF image page identity in page order, including shared resources and incomplete coverage", function()
             for _, counts in ipairs({ {1,1,1,1,1,1,1,1,1,1,1,1}, {2,0,1,1} }) do
                 local document, err = doc2md.convert({bytes = pdf_pages.pdf(counts)}, {extract_images = true, page_markers = true})

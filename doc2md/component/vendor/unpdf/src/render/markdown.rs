@@ -59,54 +59,67 @@ impl MarkdownRenderer {
     fn render_internal(&mut self, doc: &Document) -> Result<String> {
         let mut output = String::new();
 
+        let cleanup = self
+            .options
+            .cleanup
+            .as_ref()
+            .map(|options| CleanupPipeline::new(options.clone()));
+
         // Add frontmatter if requested
         if self.options.include_frontmatter {
-            output.push_str(&doc.metadata.to_yaml_frontmatter());
+            output.push_str(&clean(
+                &doc.metadata.to_yaml_frontmatter(),
+                cleanup.as_ref(),
+            ));
         }
 
         // Render selected pages
         for page in &doc.pages {
             if self.options.page_selection.includes(page.number) {
-                self.render_page(&mut output, page);
+                self.render_page(&mut output, page, cleanup.as_ref());
             }
         }
 
         // Render form fields section
         if !doc.form_fields.is_empty() {
-            output.push_str("\n---\n\n");
-            output.push_str("## Form Fields\n\n");
+            let mut section = String::from("---\n\n## Form Fields\n\n");
             for field in &doc.form_fields {
                 let value = field.display_value();
                 if value.is_empty() {
-                    output.push_str(&format!("- **{}**: _(empty)_\n", field.name));
+                    section.push_str(&format!("- **{}**: _(empty)_\n", field.name));
                 } else {
-                    output.push_str(&format!("- **{}**: {}\n", field.name, value));
+                    section.push_str(&format!("- **{}**: {}\n", field.name, value));
                 }
             }
+            if !output.is_empty() && !output.ends_with("\n\n") {
+                output.push_str("\n\n");
+            }
+            output.push_str(&clean(&section, cleanup.as_ref()));
         }
 
-        // Apply cleanup if configured
-        if let Some(ref cleanup_options) = self.options.cleanup {
-            let pipeline = CleanupPipeline::new(cleanup_options.clone());
-            output = pipeline.process(&output);
-        }
-
-        Ok(output.trim().to_string())
+        Ok(output)
     }
 
-    fn render_page(&mut self, output: &mut String, page: &Page) {
-        if self.options.page_markers == PageMarkerStyle::Comment {
-            if !output.is_empty() && !output.ends_with("\n\n") {
-                output.push('\n');
-            }
-            output.push_str(&format!("<!-- page {} -->\n\n", page.number));
-        }
+    fn render_page(&mut self, output: &mut String, page: &Page, cleanup: Option<&CleanupPipeline>) {
         if self.options.collect_stats {
             self.stats.add_page();
         }
+        let mut body = String::new();
         for block in &page.elements {
-            self.render_block(output, block);
+            self.render_block(&mut body, block);
         }
+        // Cleanup only sees the page body; markers and neighbouring pages stay separate.
+        let body = clean(&body, cleanup);
+        if body.is_empty() && self.options.page_markers == PageMarkerStyle::None {
+            return;
+        }
+        if !output.is_empty() && !output.ends_with("\n\n") {
+            output.push_str("\n\n");
+        }
+        if self.options.page_markers == PageMarkerStyle::Comment {
+            output.push_str(&format!("<!-- page {} -->\n\n", page.number));
+        }
+        output.push_str(&body);
     }
 
     fn render_block(&mut self, output: &mut String, block: &Block) {
@@ -430,6 +443,13 @@ fn to_roman(mut num: u32) -> String {
     result
 }
 
+fn clean(text: &str, cleanup: Option<&CleanupPipeline>) -> String {
+    match cleanup {
+        Some(pipeline) => pipeline.process(text),
+        None => text.trim().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,5 +642,100 @@ mod tests {
             marker_pos > second_dashes,
             "marker must appear after frontmatter"
         );
+    }
+
+    #[test]
+    fn test_page_cleanup_does_not_absorb_markers() {
+        for ending in ["•", "●", "1.", "word-", "한"] {
+            for cleanup in [
+                None,
+                Some(super::super::CleanupOptions::minimal()),
+                Some(super::super::CleanupOptions::standard()),
+                Some(super::super::CleanupOptions::aggressive()),
+            ] {
+                let mut doc = Document::new();
+                for (number, text) in [(1, ending), (2, "next page")] {
+                    let mut page = Page::letter(number);
+                    page.add_paragraph(Paragraph::with_text("Page body."));
+                    page.add_paragraph(Paragraph::with_text(text));
+                    doc.add_page(page);
+                }
+                for markers in [PageMarkerStyle::Comment, PageMarkerStyle::None] {
+                    let mut options = RenderOptions::new().with_page_markers(markers);
+                    options.cleanup = cleanup.clone();
+                    let whole = to_markdown(&doc, &options).unwrap();
+                    let pages: Vec<_> = (1..=2)
+                        .map(|number| {
+                            to_markdown(&doc, &options.clone().with_page_list(vec![number]))
+                                .unwrap()
+                                .trim_end()
+                                .to_string()
+                        })
+                        .filter(|page| !page.is_empty())
+                        .collect();
+                    assert_eq!(
+                        whole.trim_end(),
+                        pages.join("\n\n"),
+                        "ending: {ending}, options: {options:?}"
+                    );
+                    if markers == PageMarkerStyle::Comment {
+                        for number in 1..=2 {
+                            assert!(whole.contains(&format!("<!-- page {number} -->\n\n")));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_empty_page_markers_keep_their_blank_line() {
+        let mut doc = Document::new();
+        doc.add_page(Page::letter(1));
+        doc.add_page(Page::letter(2));
+        for cleanup in [None, Some(super::super::CleanupOptions::standard())] {
+            let mut options = RenderOptions::new().with_page_markers(PageMarkerStyle::Comment);
+            options.cleanup = cleanup;
+            assert_eq!(
+                to_markdown(&doc, &options).unwrap(),
+                "<!-- page 1 -->\n\n<!-- page 2 -->\n\n"
+            );
+        }
+    }
+
+    #[test]
+    fn test_existing_pdf_fixture_output() {
+        for (name, bytes) in [
+            (
+                "sample",
+                include_bytes!("../../../../tests/assets/sample.pdf").as_slice(),
+            ),
+            (
+                "ascii85_flate",
+                include_bytes!("../../../../tests/assets/ascii85_flate.pdf").as_slice(),
+            ),
+            (
+                "synthetic_heading_tie",
+                include_bytes!("../../../../tests/assets/synthetic_heading_tie.pdf").as_slice(),
+            ),
+        ] {
+            let doc = crate::parse_bytes(bytes).unwrap();
+            for markers in [PageMarkerStyle::None, PageMarkerStyle::Comment] {
+                let result =
+                    to_markdown(&doc, &RenderOptions::new().with_page_markers(markers)).unwrap();
+                let expected = match name {
+                    "sample" => "Hello from PDF",
+                    "ascii85_flate" => "PUBLIC ASCII85 REGRESSION: The same text must survive every encoding.",
+                    "synthetic_heading_tie" => "# Alpha Heading One\n\nFirst regular body paragraph line.\n\n# Beta Heading Two\n\nSecond regular body paragraph line.\n\n# Gamma Heading Three\n\nThird regular body paragraph line.",
+                    _ => unreachable!(),
+                };
+                let expected = if markers == PageMarkerStyle::Comment {
+                    format!("<!-- page 1 -->\n\n{expected}")
+                } else {
+                    expected.to_string()
+                };
+                assert_eq!(result, expected, "fixture: {name}, markers: {markers:?}");
+            }
+        }
     }
 }
