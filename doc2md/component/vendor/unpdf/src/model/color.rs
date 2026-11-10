@@ -96,6 +96,21 @@ impl ColorSpace {
         }
     }
 
+    /// Whether an image in this space contributes paint to the page.
+    pub fn paints(&self) -> bool {
+        match self {
+            Self::Separation { name, .. } if name == "None" => false,
+            Self::Icc { alternate, .. }
+            | Self::DeviceN { alternate, .. }
+            | Self::Separation {
+                tint: Some((alternate, _)),
+                ..
+            } => alternate.paints(),
+            Self::Indexed { base, .. } => base.paints(),
+            _ => true,
+        }
+    }
+
     /// Converts color components to sRGB in [0, 1].
     pub fn to_rgb(&self, components: &[f32]) -> Option<[f32; 3]> {
         let c = |i: usize| components.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
@@ -112,7 +127,7 @@ impl ColorSpace {
                 if name == "All" {
                     [1.0 - c(0); 3]
                 } else {
-                    [1.0; 3]
+                    return None;
                 }
             }
             ColorSpace::Rgb => [c(0), c(1), c(2)],
@@ -309,7 +324,7 @@ impl Function {
                 decode,
                 samples,
                 out,
-            ),
+            )?,
             Function::Exponential {
                 domain,
                 c0,
@@ -392,6 +407,18 @@ impl Function {
     }
 }
 
+// At most 32 inputs, with bounded multilinear work (256 effective corners).
+// Singleton axes contribute no interpolation corners.
+pub(crate) fn sampled_corner_count(size: &[u32]) -> Option<usize> {
+    if size.is_empty() || size.len() > 32 || size.contains(&0) {
+        return None;
+    }
+    size.iter().try_fold(1usize, |corners, s| {
+        let corners = corners * if *s > 1 { 2 } else { 1 };
+        (corners <= 256).then_some(corners)
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn eval_sampled(
     input: &[f32],
@@ -403,7 +430,8 @@ fn eval_sampled(
     decode: &[f32],
     samples: &[u8],
     out: &mut [f32],
-) {
+) -> Option<()> {
+    let corners = sampled_corner_count(size)?;
     let m = size.len();
     let n = range.len() / 2;
     let mut base = [0usize; 32];
@@ -429,15 +457,19 @@ fn eval_sampled(
     }
     let max_sample = ((1u64 << bits) - 1) as f32;
     out.fill(0.0);
-    for corner in 0..(1usize << m) {
+    for corner in 0..corners {
+        let mut corner_bits = corner;
         let mut weight = 1.0;
         let mut index = 0usize;
         let mut stride = 1usize;
         for i in 0..m {
-            let upper = corner >> i & 1 == 1;
-            weight *= if upper { frac[i] } else { 1.0 - frac[i] };
-            index += (base[i] + upper as usize) * stride;
-            stride *= size[i] as usize;
+            if size[i] > 1 {
+                let upper = corner_bits & 1 == 1;
+                corner_bits >>= 1;
+                weight *= if upper { frac[i] } else { 1.0 - frac[i] };
+                index += (base[i] + upper as usize) * stride;
+            }
+            stride = stride.checked_mul(size[i] as usize)?;
         }
         if weight == 0.0 {
             continue;
@@ -455,6 +487,7 @@ fn eval_sampled(
         *value = interpolate(*value, 0.0, max_sample, d0, d1);
     }
     clip_to(out, range);
+    Some(())
 }
 
 /// A token of a type 4 (PostScript calculator) function program.

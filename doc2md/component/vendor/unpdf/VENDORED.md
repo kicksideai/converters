@@ -78,14 +78,22 @@ resolves DeviceGray/RGB/CMYK, CalGray, CalRGB, Lab, ICCBased (`/N`, matching
 resources; image masks resolve to gray with one bit per sample. `resolve_function`
 parses the tint transforms: linear type 0 (rejecting unsupported `/Order` values),
 types 2, 3, 4, and function arrays. Separation retains its colorant name;
-`/All` and `/None` ignore the alternate and tint transform.
+`/All` and `/None` ignore the alternate and tint transform. `/None` contributes
+no pixels, so consumers omit it instead of painting opaque white. XObjects
+retain resolved color semantics even for encoded streams; the shared resource
+converter omits non-painting images before JPEG/JPX passthrough. Sampled
+functions accept up to 32 input dimensions and 256 effective interpolation
+corners; singleton dimensions contribute no corners. Table lengths use checked
+arithmetic, and interpolation uses fixed buffers.
 `model::color` evaluates functions into caller-owned buffers (`Function::eval_into`,
 including the type 4 PostScript calculator with comments, logical 32-bit shifts,
 and a bounded operand stack), converts components to sRGB (`ColorSpace::to_rgb`), and reads packed
 1-16 bit samples (`read_sample`).
 
 Single-element `/DCTDecode` and `/JPXDecode` filter arrays retain their encoded
-format. Unsupported streams retain their page resource count without claiming
+format. Stream decompression resolves indirect filters and decode parameters
+(including array entries), applies parameters to their corresponding filter, and
+rejects unresolved entries. Unsupported streams retain their page resource count without claiming
 decoded samples. Streamed and buffered parsing retain raw image resources and
 their block positions, allowing consumers to omit undecodable files without
 moving subsequent links. Stencil masks use black paint on white.

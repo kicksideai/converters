@@ -80,7 +80,7 @@ pub struct RawXObject {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub bits_per_component: Option<u8>,
-    pub color_space: Option<String>,
+    pub color_space: Option<(String, Option<ColorSpace>)>,
     /// Set when `data` holds fully decoded samples in a resolved color space.
     pub samples: Option<SampleLayout>,
 }
@@ -212,11 +212,11 @@ impl PdfBackend for RawBackend {
                     .ok_or_else(|| Error::PdfParse("Content stream not found".to_string()))?;
                 let resolved = self.doc.resolve(obj);
                 if let Some(stream) = resolved.as_stream() {
-                    return raw_stream::decompress(stream);
+                    return raw_stream::decompress(stream, |o| self.doc.resolve(o));
                 }
                 Err(Error::PdfParse("Invalid content stream".to_string()))
             }
-            RawPdfObject::Stream(stream) => raw_stream::decompress(stream),
+            RawPdfObject::Stream(stream) => raw_stream::decompress(stream, |o| self.doc.resolve(o)),
             RawPdfObject::Array(arr) => {
                 let mut content = Vec::new();
                 for item in arr {
@@ -236,7 +236,7 @@ impl PdfBackend for RawBackend {
                         }
                         _ => continue,
                     };
-                    if let Ok(data) = raw_stream::decompress(stream_obj) {
+                    if let Ok(data) = raw_stream::decompress(stream_obj, |o| self.doc.resolve(o)) {
                         content.extend_from_slice(&data);
                         content.push(b' ');
                     }
@@ -378,7 +378,7 @@ impl PdfBackend for RawBackend {
 
                         let decoded = match filter.as_deref() {
                             Some("DCTDecode") | Some("JPXDecode") => None,
-                            _ => raw_stream::decompress(stream).ok(),
+                            _ => raw_stream::decompress(stream, |o| self.doc.resolve(o)).ok(),
                         };
                         let samples_decoded = decoded.is_some();
                         let data = decoded.unwrap_or_else(|| stream.raw_data.clone());
@@ -402,32 +402,35 @@ impl PdfBackend for RawBackend {
                         };
 
                         let color_space =
-                            raw_dict_get(dict, b"ColorSpace").and_then(|cs| match cs {
-                                RawPdfObject::Name(n) => {
-                                    Some(String::from_utf8_lossy(n).to_string())
+                            raw_dict_get(dict, b"ColorSpace").and_then(|cs| {
+                                match self.doc.resolve(cs) {
+                                    RawPdfObject::Name(n) => {
+                                        Some(String::from_utf8_lossy(n).to_string())
+                                    }
+                                    RawPdfObject::Array(arr) => arr
+                                        .first()
+                                        .and_then(|o| o.as_name())
+                                        .map(|n| String::from_utf8_lossy(n).to_string()),
+                                    _ => None,
                                 }
-                                RawPdfObject::Array(arr) => arr
-                                    .first()
-                                    .and_then(|o| o.as_name())
-                                    .map(|n| String::from_utf8_lossy(n).to_string()),
-                                _ => None,
                             });
 
-                        let samples = if subtype != "Image" || !samples_decoded {
-                            None
-                        } else if image_mask {
+                        let resolved_color_space = if image_mask {
                             Some(ColorSpace::Gray)
                         } else {
                             let named = raw_dict_get(res_dict, b"ColorSpace")
                                 .and_then(|cs| raw_resolve_dict(&self.doc, cs));
                             raw_dict_get(dict, b"ColorSpace")
                                 .and_then(|cs| resolve_color_space(&self.doc, cs, named, 0))
-                        }
-                        .map(|color_space| SampleLayout {
-                            color_space,
-                            decode: raw_dict_get(dict, b"Decode")
-                                .and_then(|d| raw_numbers(&self.doc, d)),
-                        });
+                        };
+                        let samples = resolved_color_space
+                            .clone()
+                            .filter(|_| subtype == "Image" && samples_decoded)
+                            .map(|color_space| SampleLayout {
+                                color_space,
+                                decode: raw_dict_get(dict, b"Decode")
+                                    .and_then(|d| raw_numbers(&self.doc, d)),
+                            });
 
                         xobjects.push(RawXObject {
                             name: String::from_utf8_lossy(name).to_string(),
@@ -437,7 +440,7 @@ impl PdfBackend for RawBackend {
                             width,
                             height,
                             bits_per_component: bits,
-                            color_space,
+                            color_space: color_space.map(|name| (name, resolved_color_space)),
                             samples,
                         });
                     }
@@ -954,7 +957,8 @@ impl RawFontResolver {
             _ => return None,
         };
 
-        let data = raw_stream::decompress(stream).unwrap_or_else(|_| stream.raw_data.clone());
+        let data = raw_stream::decompress(stream, |o| doc.resolve(o))
+            .unwrap_or_else(|_| stream.raw_data.clone());
         parse_to_unicode_cmap(&data)
     }
 
@@ -1084,8 +1088,8 @@ impl RawFontResolver {
             _ => return None,
         };
 
-        let font_data =
-            raw_stream::decompress(font_stream).unwrap_or_else(|_| font_stream.raw_data.clone());
+        let font_data = raw_stream::decompress(font_stream, |o| doc.resolve(o))
+            .unwrap_or_else(|_| font_stream.raw_data.clone());
         parse_truetype_cmap_table(&font_data)
     }
 
@@ -1315,7 +1319,7 @@ fn raw_numbers(doc: &RawDocument, obj: &RawPdfObject) -> Option<Vec<f32>> {
 
 fn raw_stream_data(doc: &RawDocument, obj: &RawPdfObject) -> Option<Vec<u8>> {
     match doc.resolve(obj) {
-        RawPdfObject::Stream(stream) => raw_stream::decompress(stream).ok(),
+        RawPdfObject::Stream(stream) => raw_stream::decompress(stream, |o| doc.resolve(o)).ok(),
         RawPdfObject::Str(bytes) => Some(bytes.clone()),
         _ => None,
     }
@@ -1487,15 +1491,20 @@ fn resolve_function(doc: &RawDocument, obj: &RawPdfObject, depth: usize) -> Opti
             let bits_per_sample =
                 raw_dict_get(dict, b"BitsPerSample").and_then(|b| doc.resolve(b).as_i64())? as u32;
             if size.is_empty()
-                || size.iter().any(|s| *s == 0)
+                || crate::model::sampled_corner_count(&size).is_none()
                 || size.len() * 2 != domain.len()
                 || ![1, 2, 4, 8, 12, 16, 24, 32].contains(&bits_per_sample)
             {
                 return None;
             }
             let samples = raw_stream_data(doc, obj)?;
-            let count: usize = size.iter().map(|s| *s as usize).product();
-            if samples.len() * 8 < count * (range.len() / 2) * bits_per_sample as usize {
+            let count = size
+                .iter()
+                .try_fold(1usize, |n, s| n.checked_mul(*s as usize))?;
+            let required_bits = count
+                .checked_mul(range.len() / 2)?
+                .checked_mul(bits_per_sample as usize)?;
+            if samples.len().checked_mul(8)? < required_bits {
                 return None;
             }
             Some(Function::Sampled {

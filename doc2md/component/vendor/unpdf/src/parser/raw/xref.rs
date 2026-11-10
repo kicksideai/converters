@@ -273,7 +273,7 @@ fn parse_xref_stream(data: &[u8], pos: usize) -> XrefParseResult {
         };
 
     // Decompress stream data
-    let stream_data = stream::decompress(stream)?;
+    let stream_data = stream::decompress(stream, |o| o)?;
 
     // Parse entries from decompressed data
     let mut entries = Vec::new();

@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn special_separation_colorants_ignore_the_alternate_and_transform() {
-        for (name, expected) in [("All", vec![255, 127, 0]), ("None", vec![255, 255, 255])] {
+        for (name, expected) in [("All", vec![255, 127, 0])] {
             let pdf = pdf_with_image(
                 &format!("/Width 3 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /{name} /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>]"),
                 &[0, 128, 255], "", &[]);
@@ -445,6 +445,131 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn separation_none_emits_no_image_and_stays_counted() {
+        for filter in ["", "/Filter /DCTDecode", "/Filter [/JPXDecode]"] {
+            let pdf = pdf_with_image(
+                &format!("/Width 3 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /None /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>] {filter}"),
+                &[0, 128, 255], "", &[]);
+            assert_no_image_and_counted(&pdf);
+        }
+    }
+
+    fn assert_no_image_and_counted(pdf: &[u8]) {
+        let converted = convert_pdf(
+            pdf,
+            Settings {
+                extract_images: true,
+                page_markers: true,
+            },
+        )
+        .unwrap();
+        assert!(
+            converted.images.is_empty(),
+            "undecodable or non-painting resources produce no image"
+        );
+        let pages = crate::collect_page_resources(pdf).unwrap();
+        assert_eq!((pages[0].image_count, pages[0].text_len), (1, 0));
+    }
+
+    #[test]
+    fn indirect_filters_never_become_fake_pixels() {
+        for filter in [
+            "6 0 R",
+            "[6 0 R]",
+            "99 0 R",
+            "[99 0 R]",
+            "[/ASCIIHexDecode 6 0 R]",
+        ] {
+            let pdf = pdf_with_image(
+                &format!("/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter {filter}"),
+                b"80>", "", &[Object { dict: "/CCITTFaxDecode", stream: None }]);
+            assert_no_image_and_counted(&pdf);
+        }
+    }
+
+    #[test]
+    fn indirect_filters_and_decode_parameters_produce_exact_pixels() {
+        for (filter, parms) in [
+            ("6 0 R", "7 0 R"),
+            ("[6 0 R]", "[7 0 R]"),
+            ("8 0 R", "9 0 R"),
+        ] {
+            let encoded = flate(&[0, 10, 20, 30]);
+            let pdf = pdf_with_image(
+                &format!("/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceRGB /Filter {filter} /DecodeParms {parms}"),
+                &encoded, "", &[
+                    Object {dict: "/FlateDecode", stream: None},
+                    Object {dict: "<< /Predictor 15 /Columns 1 /Colors 3 /BitsPerComponent 8 >>", stream: None},
+                    Object {dict: "[6 0 R]", stream: None},
+                    Object {dict: "[7 0 R]", stream: None},
+                ]);
+            assert_eq!(extracted_png(&pdf), (png::ColorType::Rgb, vec![10, 20, 30]));
+        }
+    }
+
+    fn sampled_devicen_pdf(size: &[u32], samples: &[u8]) -> Vec<u8> {
+        let names = (0..size.len())
+            .map(|i| format!("/Ink{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let sizes = size
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        pdf_with_image(
+            &format!("/Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/DeviceN [{names}] /DeviceGray 6 0 R]"),
+            &[vec![0; size.len()], vec![255; size.len()]].concat(), "", &[
+                Object {dict: &format!("/FunctionType 0 /Domain [{}] /Range [0 1] /Size [{sizes}] /BitsPerSample 8", "0 1 ".repeat(size.len())), stream: Some(samples)}])
+    }
+
+    #[test]
+    fn sampled_functions_reject_excessive_effective_corners() {
+        assert_no_image_and_counted(&sampled_devicen_pdf(&[2; 9], &[128; 512]));
+    }
+
+    #[test]
+    fn sampled_singleton_dimensions_do_not_add_corners() {
+        assert_eq!(
+            extracted_png(&sampled_devicen_pdf(&[1; 32], &[73])),
+            (png::ColorType::Grayscale, vec![73, 73])
+        );
+        let mut sizes = [1; 32];
+        sizes[0] = 2;
+        sizes[31] = 2;
+        assert_eq!(
+            extracted_png(&sampled_devicen_pdf(&sizes, &[0, 64, 128, 255])),
+            (png::ColorType::Grayscale, vec![0, 255])
+        );
+        assert_eq!(
+            extracted_png(&sampled_devicen_pdf(&[2; 8], &[128; 256])),
+            (png::ColorType::Grayscale, vec![128, 128])
+        );
+    }
+
+    #[test]
+    fn sampled_singleton_evaluation_has_no_heap_allocations() {
+        use unpdf::model::Function;
+        let function = Function::Sampled {
+            domain: [0., 1.].repeat(32),
+            range: vec![0., 1.],
+            size: vec![1; 32],
+            bits_per_sample: 8,
+            encode: [0., 0.].repeat(32),
+            decode: vec![0., 1.],
+            samples: vec![73],
+        };
+        let (allocations, ()) = crate::test_allocations::count(|| {
+            let mut output = [0.];
+            for _ in 0..4096 {
+                function.eval_into(&[0.5; 32], &mut output).unwrap();
+                assert_eq!(output, [73. / 255.]);
+            }
+        });
+        assert_eq!(allocations, 0);
     }
 
     #[test]
