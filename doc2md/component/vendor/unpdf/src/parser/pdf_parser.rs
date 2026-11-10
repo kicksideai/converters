@@ -223,16 +223,7 @@ pub(crate) fn parse_single_page(
                     if let Some(resource) = convert_xobject_pub(xobj) {
                         page.extracted_resources.push((base_id.clone(), resource));
                         let resource = &page.extracted_resources.last().unwrap().1;
-                        // 뷰어가 렌더할 수 있는 이미지 포맷만 MD/디스크에 포함.
-                        // `.raw` (FlateDecode 등 미디코딩 픽셀버퍼) 는 대부분의
-                        // MD 뷰어가 표시 못하므로 broken icon 을 피하기 위해 제외.
-                        // 추후 Phase 에서 color_space + bits_per_component 기반
-                        // PNG 재구성으로 포괄 예정.
                         if !resource.is_image() {
-                            continue;
-                        }
-                        let ext = resource.extension();
-                        if ext == "raw" || ext == "bin" {
                             continue;
                         }
                         // 장식용 작은 이미지(로고, 구분선, 트래킹 픽셀 등) 제외.
@@ -284,8 +275,14 @@ pub(crate) fn convert_xobject_pub(xobj: RawXObject) -> Option<Resource> {
     if let Some(b) = xobj.bits_per_component {
         resource = resource.with_bits_per_component(b);
     }
-    if let Some(cs) = xobj.color_space {
+    if let Some((cs, space)) = xobj.color_space {
+        if space.as_ref().is_some_and(|space| !space.paints()) {
+            return None;
+        }
         resource = resource.with_color_space(cs);
+    }
+    if let Some(layout) = xobj.samples {
+        resource = resource.with_samples(layout);
     }
     Some(resource)
 }
@@ -591,7 +588,8 @@ mod tests {
                     width: Some(size),
                     height: Some(size),
                     bits_per_component: Some(8),
-                    color_space: Some("DeviceGray".into()),
+                    color_space: Some(("DeviceGray".into(), Some(crate::model::ColorSpace::Gray))),
+                    samples: None,
                 })
                 .collect())
             }

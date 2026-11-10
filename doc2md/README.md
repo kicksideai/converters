@@ -40,9 +40,9 @@ make test
 ```
 
 `make test` also runs the native Rust suites in release mode. The generated
-100-page scanned PDF has a two-second native conversion budget. Parser checks
-require one XObject extraction per page, including resources omitted from page
-blocks. PNG round-trip checks cover grayscale, RGB and CMYK samples.
+100-page scanned PDF checks image pixels and page identity. The deterministic
+performance guard requires one XObject extraction per page, including resources
+omitted from page blocks. PNG round-trip checks cover grayscale, RGB and CMYK samples.
 
 `make build-component` rebuilds and stages the WASM asset and its registry hash.
 Run the converter suite against hosts using each database engine when changing

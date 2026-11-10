@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::RwLock;
 
 use crate::error::{Error, Result};
-use crate::model::{FieldType, FieldValue, FormField};
+use crate::model::{
+    parse_calculator, ColorSpace, FieldType, FieldValue, FormField, Function, SampleLayout,
+};
 
 use super::encoding::{build_encoding_map, decode_with_encoding_map, BaseEncoding};
 use super::font::{
@@ -78,7 +80,9 @@ pub struct RawXObject {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub bits_per_component: Option<u8>,
-    pub color_space: Option<String>,
+    pub color_space: Option<(String, Option<ColorSpace>)>,
+    /// Set when `data` holds fully decoded samples in a resolved color space.
+    pub samples: Option<SampleLayout>,
 }
 
 /// Abstract interface for PDF document access.
@@ -208,11 +212,11 @@ impl PdfBackend for RawBackend {
                     .ok_or_else(|| Error::PdfParse("Content stream not found".to_string()))?;
                 let resolved = self.doc.resolve(obj);
                 if let Some(stream) = resolved.as_stream() {
-                    return raw_stream::decompress(stream);
+                    return raw_stream::decompress(stream, |o| self.doc.resolve(o));
                 }
                 Err(Error::PdfParse("Invalid content stream".to_string()))
             }
-            RawPdfObject::Stream(stream) => raw_stream::decompress(stream),
+            RawPdfObject::Stream(stream) => raw_stream::decompress(stream, |o| self.doc.resolve(o)),
             RawPdfObject::Array(arr) => {
                 let mut content = Vec::new();
                 for item in arr {
@@ -232,7 +236,7 @@ impl PdfBackend for RawBackend {
                         }
                         _ => continue,
                     };
-                    if let Ok(data) = raw_stream::decompress(stream_obj) {
+                    if let Ok(data) = raw_stream::decompress(stream_obj, |o| self.doc.resolve(o)) {
                         content.extend_from_slice(&data);
                         content.push(b' ');
                     }
@@ -364,14 +368,20 @@ impl PdfBackend for RawBackend {
                         }
 
                         let filter = raw_dict_get(dict, b"Filter")
-                            .and_then(|f| f.as_name())
+                            .and_then(|f| match self.doc.resolve(f) {
+                                RawPdfObject::Array(filters) if filters.len() == 1 => {
+                                    self.doc.resolve(&filters[0]).as_name()
+                                }
+                                filter => filter.as_name(),
+                            })
                             .map(|n| String::from_utf8_lossy(n).to_string());
 
-                        let data = match filter.as_deref() {
-                            Some("DCTDecode") | Some("JPXDecode") => stream.raw_data.clone(),
-                            _ => raw_stream::decompress(stream)
-                                .unwrap_or_else(|_| stream.raw_data.clone()),
+                        let decoded = match filter.as_deref() {
+                            Some("DCTDecode") | Some("JPXDecode") => None,
+                            _ => raw_stream::decompress(stream, |o| self.doc.resolve(o)).ok(),
                         };
+                        let samples_decoded = decoded.is_some();
+                        let data = decoded.unwrap_or_else(|| stream.raw_data.clone());
 
                         let width = raw_dict_get(dict, b"Width")
                             .and_then(|w| w.as_i64())
@@ -379,20 +389,47 @@ impl PdfBackend for RawBackend {
                         let height = raw_dict_get(dict, b"Height")
                             .and_then(|h| h.as_i64())
                             .map(|h| h as u32);
-                        let bits = raw_dict_get(dict, b"BitsPerComponent")
-                            .and_then(|b| b.as_i64())
-                            .map(|b| b as u8);
+                        let image_mask = matches!(
+                            raw_dict_get(dict, b"ImageMask").map(|m| self.doc.resolve(m)),
+                            Some(RawPdfObject::Bool(true))
+                        );
+                        let bits = if image_mask {
+                            Some(1)
+                        } else {
+                            raw_dict_get(dict, b"BitsPerComponent")
+                                .and_then(|b| self.doc.resolve(b).as_i64())
+                                .map(|b| b as u8)
+                        };
 
                         let color_space =
-                            raw_dict_get(dict, b"ColorSpace").and_then(|cs| match cs {
-                                RawPdfObject::Name(n) => {
-                                    Some(String::from_utf8_lossy(n).to_string())
+                            raw_dict_get(dict, b"ColorSpace").and_then(|cs| {
+                                match self.doc.resolve(cs) {
+                                    RawPdfObject::Name(n) => {
+                                        Some(String::from_utf8_lossy(n).to_string())
+                                    }
+                                    RawPdfObject::Array(arr) => arr
+                                        .first()
+                                        .and_then(|o| o.as_name())
+                                        .map(|n| String::from_utf8_lossy(n).to_string()),
+                                    _ => None,
                                 }
-                                RawPdfObject::Array(arr) => arr
-                                    .first()
-                                    .and_then(|o| o.as_name())
-                                    .map(|n| String::from_utf8_lossy(n).to_string()),
-                                _ => None,
+                            });
+
+                        let resolved_color_space = if image_mask {
+                            Some(ColorSpace::Gray)
+                        } else {
+                            let named = raw_dict_get(res_dict, b"ColorSpace")
+                                .and_then(|cs| raw_resolve_dict(&self.doc, cs));
+                            raw_dict_get(dict, b"ColorSpace")
+                                .and_then(|cs| resolve_color_space(&self.doc, cs, named, 0))
+                        };
+                        let samples = resolved_color_space
+                            .clone()
+                            .filter(|_| subtype == "Image" && samples_decoded)
+                            .map(|color_space| SampleLayout {
+                                color_space,
+                                decode: raw_dict_get(dict, b"Decode")
+                                    .and_then(|d| raw_numbers(&self.doc, d)),
                             });
 
                         xobjects.push(RawXObject {
@@ -403,7 +440,8 @@ impl PdfBackend for RawBackend {
                             width,
                             height,
                             bits_per_component: bits,
-                            color_space,
+                            color_space: color_space.map(|name| (name, resolved_color_space)),
+                            samples,
                         });
                     }
                 }
@@ -919,7 +957,8 @@ impl RawFontResolver {
             _ => return None,
         };
 
-        let data = raw_stream::decompress(stream).unwrap_or_else(|_| stream.raw_data.clone());
+        let data = raw_stream::decompress(stream, |o| doc.resolve(o))
+            .unwrap_or_else(|_| stream.raw_data.clone());
         parse_to_unicode_cmap(&data)
     }
 
@@ -1049,8 +1088,8 @@ impl RawFontResolver {
             _ => return None,
         };
 
-        let font_data =
-            raw_stream::decompress(font_stream).unwrap_or_else(|_| font_stream.raw_data.clone());
+        let font_data = raw_stream::decompress(font_stream, |o| doc.resolve(o))
+            .unwrap_or_else(|_| font_stream.raw_data.clone());
         parse_truetype_cmap_table(&font_data)
     }
 
@@ -1262,6 +1301,269 @@ fn raw_resolve_dict<'a>(doc: &'a RawDocument, obj: &'a RawPdfObject) -> Option<&
     match resolved {
         RawPdfObject::Dict(d) => Some(d),
         RawPdfObject::Stream(s) => Some(&s.dict),
+        _ => None,
+    }
+}
+
+/// Nesting bound for color spaces and functions that refer to others.
+const MAX_COLOR_DEPTH: usize = 8;
+
+/// Resolve a number array, following references.
+fn raw_numbers(doc: &RawDocument, obj: &RawPdfObject) -> Option<Vec<f32>> {
+    doc.resolve(obj)
+        .as_array()?
+        .iter()
+        .map(|o| doc.resolve(o).as_f32())
+        .collect()
+}
+
+fn raw_stream_data(doc: &RawDocument, obj: &RawPdfObject) -> Option<Vec<u8>> {
+    match doc.resolve(obj) {
+        RawPdfObject::Stream(stream) => raw_stream::decompress(stream, |o| doc.resolve(o)).ok(),
+        RawPdfObject::Str(bytes) => Some(bytes.clone()),
+        _ => None,
+    }
+}
+
+/// Resolve an image color space (ISO 32000-1 8.6). `named` is the page's
+/// `/ColorSpace` resource dictionary, used for color spaces given by name.
+fn resolve_color_space(
+    doc: &RawDocument,
+    obj: &RawPdfObject,
+    named: Option<&RawPdfDict>,
+    depth: usize,
+) -> Option<ColorSpace> {
+    if depth > MAX_COLOR_DEPTH {
+        return None;
+    }
+    let obj = doc.resolve(obj);
+    let (family, params): (&[u8], &[RawPdfObject]) = match obj {
+        RawPdfObject::Name(name) => (name.as_slice(), &[]),
+        RawPdfObject::Array(items) => (items.first()?.as_name()?, &items[1..]),
+        _ => return None,
+    };
+    match family {
+        b"DeviceGray" | b"G" | b"CalGray" => Some(ColorSpace::Gray),
+        b"DeviceRGB" | b"RGB" | b"CalRGB" => Some(ColorSpace::Rgb),
+        b"DeviceCMYK" | b"CMYK" => Some(ColorSpace::Cmyk),
+        b"Lab" => {
+            let dict = raw_resolve_dict(doc, params.first()?)?;
+            let white = raw_dict_get(dict, b"WhitePoint").and_then(|w| raw_numbers(doc, w))?;
+            let range = raw_dict_get(dict, b"Range")
+                .and_then(|r| raw_numbers(doc, r))
+                .unwrap_or_else(|| vec![-100.0, 100.0, -100.0, 100.0]);
+            Some(ColorSpace::Lab {
+                white_point: white.get(..3)?.try_into().ok()?,
+                range: range.get(..4)?.try_into().ok()?,
+            })
+        }
+        b"ICCBased" => {
+            let dict = raw_resolve_dict(doc, params.first()?)?;
+            let n = raw_dict_get(dict, b"N").and_then(|n| doc.resolve(n).as_i64())?;
+            let device = match n {
+                1 => ColorSpace::Gray,
+                3 => ColorSpace::Rgb,
+                4 => ColorSpace::Cmyk,
+                _ => return None,
+            };
+            let alternate = match raw_dict_get(dict, b"Alternate") {
+                Some(alternate) => resolve_color_space(doc, alternate, named, depth + 1)?,
+                None => device,
+            };
+            if alternate.components() != n as usize {
+                return None;
+            }
+            let range = match raw_dict_get(dict, b"Range") {
+                Some(r) => raw_numbers(doc, r)?,
+                None => [0.0, 1.0].repeat(n as usize),
+            };
+            if range.len() != 2 * n as usize || range.chunks_exact(2).any(|r| r[0] > r[1]) {
+                return None;
+            }
+            Some(ColorSpace::Icc {
+                alternate: Box::new(alternate),
+                range,
+            })
+        }
+        b"Indexed" | b"I" => {
+            let base = resolve_color_space(doc, params.first()?, named, depth + 1)?;
+            let hival = doc.resolve(params.get(1)?).as_i64()?;
+            let lookup = raw_stream_data(doc, params.get(2)?)?;
+            if !(0..=255).contains(&hival)
+                || lookup.len() < (hival as usize + 1) * base.components()
+            {
+                return None;
+            }
+            Some(ColorSpace::Indexed {
+                base: Box::new(base),
+                hival: hival as u32,
+                lookup,
+            })
+        }
+        b"Separation" | b"DeviceN" => {
+            let colorant = if family == b"Separation" {
+                Some(String::from_utf8_lossy(doc.resolve(params.first()?).as_name()?).into_owned())
+            } else {
+                None
+            };
+            if let Some(name) = colorant.as_deref() {
+                if name == "All" || name == "None" {
+                    return Some(ColorSpace::Separation {
+                        name: name.to_string(),
+                        tint: None,
+                    });
+                }
+            }
+            let components = if family == b"Separation" {
+                1
+            } else {
+                doc.resolve(params.first()?).as_array()?.len()
+            };
+            let alternate = resolve_color_space(doc, params.get(1)?, named, depth + 1)?;
+            let tint_transform = resolve_function(doc, params.get(2)?, depth + 1)?;
+            if components == 0
+                || components > 32
+                || tint_transform.outputs() != alternate.components()
+            {
+                return None;
+            }
+            Some(match colorant {
+                Some(name) => ColorSpace::Separation {
+                    name,
+                    tint: Some((Box::new(alternate), tint_transform)),
+                },
+                None => ColorSpace::DeviceN {
+                    components,
+                    alternate: Box::new(alternate),
+                    tint_transform,
+                },
+            })
+        }
+        name if params.is_empty() => {
+            let entry = raw_dict_get(named?, name)?;
+            resolve_color_space(doc, entry, None, depth + 1)
+        }
+        _ => None,
+    }
+}
+
+/// Resolve a PDF function (ISO 32000-1 7.10).
+fn resolve_function(doc: &RawDocument, obj: &RawPdfObject, depth: usize) -> Option<Function> {
+    if depth > MAX_COLOR_DEPTH {
+        return None;
+    }
+    let obj = doc.resolve(obj);
+    if let RawPdfObject::Array(items) = obj {
+        if items.is_empty() || items.len() > 32 {
+            return None;
+        }
+        return items
+            .iter()
+            .map(|item| resolve_function(doc, item, depth + 1))
+            .collect::<Option<Vec<_>>>()
+            .filter(|functions| functions.iter().all(|f| f.outputs() == 1))
+            .map(Function::Array);
+    }
+    let dict = raw_resolve_dict(doc, obj)?;
+    let numbers = |key: &[u8]| raw_dict_get(dict, key).and_then(|v| raw_numbers(doc, v));
+    let domain = numbers(b"Domain")?;
+    let range = numbers(b"Range");
+    if domain.is_empty()
+        || domain.len() % 2 != 0
+        || domain.len() > 64
+        || range
+            .as_ref()
+            .is_some_and(|r| r.is_empty() || r.len() % 2 != 0 || r.len() > 64)
+    {
+        return None;
+    }
+    let pair = |values: &[f32]| -> Option<[f32; 2]> { values.get(..2)?.try_into().ok() };
+    match raw_dict_get(dict, b"FunctionType").and_then(|t| doc.resolve(t).as_i64())? {
+        0 => {
+            let order = raw_dict_get(dict, b"Order")
+                .map(|o| doc.resolve(o).as_i64())
+                .unwrap_or(Some(1))?;
+            if order != 1 {
+                return None;
+            }
+            let range = range?;
+            let size: Vec<u32> = numbers(b"Size")?.iter().map(|s| *s as u32).collect();
+            let bits_per_sample =
+                raw_dict_get(dict, b"BitsPerSample").and_then(|b| doc.resolve(b).as_i64())? as u32;
+            if size.is_empty()
+                || crate::model::sampled_corner_count(&size).is_none()
+                || size.len() * 2 != domain.len()
+                || ![1, 2, 4, 8, 12, 16, 24, 32].contains(&bits_per_sample)
+            {
+                return None;
+            }
+            let samples = raw_stream_data(doc, obj)?;
+            let count = size
+                .iter()
+                .try_fold(1usize, |n, s| n.checked_mul(*s as usize))?;
+            let required_bits = count
+                .checked_mul(range.len() / 2)?
+                .checked_mul(bits_per_sample as usize)?;
+            if samples.len().checked_mul(8)? < required_bits {
+                return None;
+            }
+            Some(Function::Sampled {
+                encode: numbers(b"Encode").unwrap_or_else(|| {
+                    size.iter().flat_map(|s| [0.0, (*s as f32 - 1.0)]).collect()
+                }),
+                decode: numbers(b"Decode").unwrap_or_else(|| range.clone()),
+                domain,
+                range,
+                size,
+                bits_per_sample,
+                samples,
+            })
+        }
+        2 => {
+            let c0 = numbers(b"C0").unwrap_or_else(|| vec![0.0]);
+            let c1 = numbers(b"C1").unwrap_or_else(|| vec![1.0]);
+            if c0.is_empty() || c0.len() > 32 || c0.len() != c1.len() {
+                return None;
+            }
+            Some(Function::Exponential {
+                domain: pair(&domain)?,
+                c0,
+                c1,
+                exponent: raw_dict_get(dict, b"N").and_then(|n| doc.resolve(n).as_f32())?,
+                range,
+            })
+        }
+
+        3 => {
+            let functions = raw_dict_get(dict, b"Functions")
+                .and_then(|f| doc.resolve(f).as_array())?
+                .iter()
+                .map(|f| resolve_function(doc, f, depth + 1))
+                .collect::<Option<Vec<_>>>()?;
+            let bounds = numbers(b"Bounds")?;
+            let encode = numbers(b"Encode")?;
+            if functions.is_empty()
+                || functions
+                    .iter()
+                    .any(|f| f.outputs() != functions[0].outputs())
+                || bounds.len() + 1 != functions.len()
+                || encode.len() != 2 * functions.len()
+            {
+                return None;
+            }
+            Some(Function::Stitching {
+                domain: pair(&domain)?,
+                bounds,
+                encode,
+                functions,
+                range,
+            })
+        }
+        4 => Some(Function::Calculator {
+            program: parse_calculator(&raw_stream_data(doc, obj)?)?,
+            domain,
+            range: range?,
+        }),
         _ => None,
     }
 }
