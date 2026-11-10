@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::color::SampleLayout;
+
 /// An embedded resource in the document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resource {
@@ -32,6 +34,10 @@ pub struct Resource {
 
     /// Bits per component (e.g., 8)
     pub bits_per_component: Option<u8>,
+
+    /// Set when `data` holds fully decoded image samples in this layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samples: Option<SampleLayout>,
 }
 
 impl Resource {
@@ -47,6 +53,7 @@ impl Resource {
             height: None,
             color_space: None,
             bits_per_component: None,
+            samples: None,
         }
     }
 
@@ -81,6 +88,12 @@ impl Resource {
     /// Set bits per component.
     pub fn with_bits_per_component(mut self, bits: u8) -> Self {
         self.bits_per_component = Some(bits);
+        self
+    }
+
+    /// Mark `data` as decoded image samples in `layout`.
+    pub fn with_samples(mut self, layout: SampleLayout) -> Self {
+        self.samples = Some(layout);
         self
     }
 

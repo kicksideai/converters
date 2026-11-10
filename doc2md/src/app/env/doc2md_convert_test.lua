@@ -46,6 +46,69 @@ local function define()
                 test.eq(#doc2md.markers(document.markdown), #counts)
             end
         end)
+        test.it("encodes PDF image samples in any supported color space as PNG and omits undecodable ones", function()
+            local bytes = pdf_pages.image_pages({
+                { attributes = "/Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /Black /DeviceRGB {1}]", data = string.char(0, 255),
+                  objects = {{ attributes = "/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1] /Size [2] /BitsPerSample 8", body = string.char(255, 255, 255, 0, 0, 0) }} },
+                { attributes = "/Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/DeviceN [/Cyan /Magenta] /DeviceCMYK {1}]", data = string.char(255, 0, 0, 255),
+                  objects = {{ attributes = "/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1]", body = "{ 0 0 }" }} },
+                { attributes = "/Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/Indexed /DeviceRGB 1 <FF00000000FF>]", data = string.char(0, 1) },
+                { attributes = "/Width 8 /Height 1 /ImageMask true", data = string.char(170) },
+                { attributes = "/Width 8 /Height 8 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /CCITTFaxDecode", data = string.char(38, 160, 0, 16) },
+            })
+            local document, err = doc2md.convert({bytes = bytes}, {extract_images = true})
+            test.is_nil(err)
+            test.eq(#document.images, 4)
+            for index, image in ipairs(document.images) do
+                test.eq(image.page, index)
+                test.eq(image.name:sub(-4), ".png")
+                test.eq(image.data:sub(1, 8), "\137PNG\r\n\26\n")
+            end
+        end)
+        test.it("counts an undecodable scanned page so uploads can render it", function()
+            local bytes = pdf_pages.image_pages({
+                { attributes = "/Width 8 /Height 8 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 8 /Rows 8 >>", data = string.char(38, 162, 255, 254, 0, 32, 2) },
+            })
+            local document, err = doc2md.convert({bytes = bytes}, {extract_images = true, page_markers = true})
+            test.is_nil(err)
+            test.eq(#document.images, 0)
+            local pages, scan_err = doc2md.page_resources({bytes = bytes})
+            test.is_nil(scan_err)
+            test.eq(#pages, 1)
+            test.eq(pages[1].page, 1)
+            test.eq(pages[1].image_count, 1)
+            test.eq(pages[1].text_len, 0)
+        end)
+        test.it("omits indirect undecodable filters and non-painting colorants while counting their pages", function()
+            local bytes = pdf_pages.image_pages({
+                { attributes = "/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter {1}", data = string.char(128), objects = {{attributes = "/CCITTFaxDecode"}} },
+                { attributes = "/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter [{1}]", data = string.char(128), objects = {{attributes = "/CCITTFaxDecode"}} },
+                { attributes = "/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /None /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>]", data = string.char(128) },
+            })
+            local document, err = doc2md.convert({bytes = bytes}, {extract_images = true, page_markers = true})
+            test.is_nil(err)
+            test.eq(#document.images, 0)
+            local pages, scan_err = doc2md.page_resources({bytes = bytes})
+            test.is_nil(scan_err)
+            test.eq(#pages, 3)
+            for index, page in ipairs(pages) do
+                test.eq(page.page, index)
+                test.eq(page.image_count, 1)
+                test.eq(page.text_len, 0)
+            end
+        end)
+        test.it("converts sampled functions with 32 singleton dimensions", function()
+            local names = {}
+            for index = 1, 32 do names[index] = "/Ink" .. index end
+            local bytes = pdf_pages.image_pages({
+                { attributes = "/Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/DeviceN [" .. table.concat(names, " ") .. "] /DeviceGray {1}]", data = string.rep(string.char(0), 32) .. string.rep(string.char(255), 32),
+                  objects = {{attributes = "/FunctionType 0 /Domain [" .. string.rep("0 1 ", 32) .. "] /Range [0 1] /Size [" .. string.rep("1 ", 32) .. "] /BitsPerSample 8", body = string.char(73)}} },
+            })
+            local document, err = doc2md.convert({bytes = bytes}, {extract_images = true})
+            test.is_nil(err)
+            test.eq(#document.images, 1)
+            test.eq(document.images[1].data:sub(1, 8), "\137PNG\r\n\26\n")
+        end)
         test.it("counts every image resource and Form before size filtering", function()
             for _, form in ipairs({false, true}) do
                 local pages, err = doc2md.page_resources({bytes = pdf_pages.pdf({2,1}, form)})

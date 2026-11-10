@@ -100,7 +100,7 @@ impl PdfParser {
                         if let Ok(xobjects) = self.backend.page_xobjects(*page_id) {
                             for xobj in xobjects {
                                 let key = format!("page{}_{}", page.number, xobj.name);
-                                if let Some(mut r) = Self::convert_xobject(xobj) {
+                                if let Some(mut r) = convert_xobject_pub(xobj) {
                                     r.page = Some(page.number);
                                     document.resources.insert(key, r);
                                 }
@@ -143,7 +143,7 @@ impl PdfParser {
             if let Ok(xobjects) = self.backend.page_xobjects(page_id) {
                 for xobj in xobjects {
                     let key = format!("page{}_{}", page_num, xobj.name);
-                    if let Some(mut resource) = Self::convert_xobject(xobj) {
+                    if let Some(mut resource) = convert_xobject_pub(xobj) {
                         resource.page = Some(page_num);
                         resources.insert(key, resource);
                     }
@@ -151,27 +151,6 @@ impl PdfParser {
             }
         }
         Ok(resources)
-    }
-
-    /// Convert a raw XObject into a model Resource.
-    fn convert_xobject(xobj: RawXObject) -> Option<Resource> {
-        if xobj.subtype != "Image" { return None; }
-        let mime_type = match xobj.filter.as_deref() {
-            Some("DCTDecode") => "image/jpeg",
-            Some("JPXDecode") => "image/jp2",
-            _ => "application/octet-stream",
-        };
-        let mut resource = Resource::new(xobj.data, mime_type.to_string(), ResourceType::Image);
-        if let (Some(w), Some(h)) = (xobj.width, xobj.height) {
-            resource = resource.with_dimensions(w, h);
-        }
-        if let Some(b) = xobj.bits_per_component {
-            resource = resource.with_bits_per_component(b);
-        }
-        if let Some(cs) = xobj.color_space {
-            resource = resource.with_color_space(cs);
-        }
-        Some(resource)
     }
 
     /// Get the number of pages.
@@ -275,16 +254,7 @@ pub(crate) fn parse_single_page(
                 for xobj in xobjects {
                     let base_id = format!("page{}_{}", page_num, xobj.name);
                     if let Some(resource) = convert_xobject_pub(xobj) {
-                        // 뷰어가 렌더할 수 있는 이미지 포맷만 MD/디스크에 포함.
-                        // `.raw` (FlateDecode 등 미디코딩 픽셀버퍼) 는 대부분의
-                        // MD 뷰어가 표시 못하므로 broken icon 을 피하기 위해 제외.
-                        // 추후 Phase 에서 color_space + bits_per_component 기반
-                        // PNG 재구성으로 포괄 예정.
                         if !resource.is_image() {
-                            continue;
-                        }
-                        let ext = resource.extension();
-                        if ext == "raw" || ext == "bin" {
                             continue;
                         }
                         // 장식용 작은 이미지(로고, 구분선, 트래킹 픽셀 등) 제외.
@@ -320,8 +290,7 @@ pub(crate) fn parse_single_page(
     Ok(page)
 }
 
-/// Free-function version of `PdfParser::convert_xobject` so `parse_single_page`
-/// (and other `run_stream` consumers) can use it without needing `&self`.
+/// Convert a raw XObject into a model resource for buffered and streamed parsing.
 pub(crate) fn convert_xobject_pub(xobj: RawXObject) -> Option<Resource> {
     if xobj.subtype != "Image" { return None; }
     let mime_type = match xobj.filter.as_deref() {
@@ -336,8 +305,14 @@ pub(crate) fn convert_xobject_pub(xobj: RawXObject) -> Option<Resource> {
     if let Some(b) = xobj.bits_per_component {
         resource = resource.with_bits_per_component(b);
     }
-    if let Some(cs) = xobj.color_space {
+    if let Some((cs, space)) = xobj.color_space {
+        if space.as_ref().is_some_and(|space| !space.paints()) {
+            return None;
+        }
         resource = resource.with_color_space(cs);
+    }
+    if let Some(layout) = xobj.samples {
+        resource = resource.with_samples(layout);
     }
     Some(resource)
 }

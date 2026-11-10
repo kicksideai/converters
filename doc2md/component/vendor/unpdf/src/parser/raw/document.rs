@@ -405,7 +405,7 @@ fn extract_objstm_objects(pdf_stream: &PdfStream) -> Result<HashMap<usize, PdfOb
         .and_then(|o| o.as_i64())
         .ok_or_else(|| Error::PdfParse("ObjStm missing /First".into()))? as usize;
 
-    let decompressed = stream::decompress(pdf_stream)?;
+    let decompressed = stream::decompress(pdf_stream, |o| o)?;
 
     // Parse header: N pairs of (obj_number, byte_offset)
     let mut pos = 0;
