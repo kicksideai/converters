@@ -29,10 +29,9 @@ entries:
       - wasi:random
     pool:
       type: inline
-    # Per-call kill deadline for a hung whole-document text extraction.
-    # Overridable per deploy like pool settings.
+    # Safety net for a hung call; callers own the effective processing budget.
     limits:
-      max_execution_ms: 90000
+      max_execution_ms: 600000
 
   - name: page_resources
     kind: function.wasm
