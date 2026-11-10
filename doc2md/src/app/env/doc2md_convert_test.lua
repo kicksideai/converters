@@ -1,6 +1,7 @@
 local test = require("test")
 local doc2md = require("doc2md")
 local fixtures = require("fixtures")
+local pdf_pages = require("pdf_pages")
 
 local function assert_markdown_document(document, expected)
     test.eq(type(document), "table")
@@ -30,6 +31,44 @@ end
 
 local function define()
     test.describe("doc2md.convert", function()
+        test.it("returns PDF image page identity in page order, including shared resources and incomplete coverage", function()
+            for _, counts in ipairs({ {1,1,1,1,1,1,1,1,1,1,1,1}, {2,0,1,1} }) do
+                local document, err = doc2md.convert({bytes = pdf_pages.pdf(counts)}, {extract_images = true, page_markers = true})
+                test.is_nil(err)
+                local index = 0
+                for page, count in ipairs(counts) do
+                    for _ = 1, count do
+                        index = index + 1
+                        test.eq(document.images[index].page, page)
+                    end
+                end
+                test.eq(#document.images, index)
+                test.eq(#doc2md.markers(document.markdown), #counts)
+            end
+        end)
+        test.it("counts every image resource and Form before size filtering", function()
+            for _, form in ipairs({false, true}) do
+                local pages, err = doc2md.page_resources({bytes = pdf_pages.pdf({2,1}, form)})
+                test.is_nil(err)
+                test.eq(pages[1].image_count, form and 3 or 2)
+                test.eq(pages[2].image_count, form and 2 or 1)
+            end
+        end)
+        test.it("counts inline images even without direct image resources", function()
+            local pages, err = doc2md.page_resources({bytes = pdf_pages.pdf({1,0}, false, true)})
+            test.is_nil(err)
+            test.eq(pages[1].image_count, 2)
+            test.eq(pages[2].image_count, 1)
+        end)
+        test.it("preserves optional page identity through the Lua normalizer", function()
+            local document, err = fake(function()
+                return {ok = {markdown = "", images = {{name = "scan.png", data = "bytes", page = 12}, {name = "figure.png", data = "bytes"}}}}, nil
+            end).convert({bytes = "data"})
+            test.is_nil(err)
+            test.eq(document.images[1].page, 12)
+            test.is_nil(document.images[2].page)
+        end)
+
         test.it("stringifies structured conversion and page-resource error messages", function()
             local mod = fake(function() return { err = { message = 409 } }, nil end)
             for _, operation in ipairs({ mod.convert, mod.page_resources }) do

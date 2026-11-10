@@ -22,6 +22,7 @@ type Marker = {
 }
 
 type Image = {
+    page: integer?,
     name: string,
     data: string,
 }
@@ -149,6 +150,7 @@ local function normalize_images(images: any): (any, error?)
                 message = PREFIX .. "converter returned invalid image data: expected binary string, got " .. type(image.data), details = {code = "internal"}}) :: error)
         end
         out[index] = {
+            page = image.page,
             name = image.name,
             data = image.data,
         }

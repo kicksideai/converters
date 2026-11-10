@@ -4,6 +4,7 @@ world converter {
     record image {
         name: string,
         data: list<u8>,
+        page: option<u32>,
     }
 
     record conversion-options {

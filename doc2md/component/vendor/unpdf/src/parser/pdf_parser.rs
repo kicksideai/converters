@@ -100,7 +100,8 @@ impl PdfParser {
                         if let Ok(xobjects) = self.backend.page_xobjects(*page_id) {
                             for xobj in xobjects {
                                 let key = format!("page{}_{}", page.number, xobj.name);
-                                if let Some(r) = Self::convert_xobject(xobj) {
+                                if let Some(mut r) = Self::convert_xobject(xobj) {
+                                    r.page = Some(page.number);
                                     document.resources.insert(key, r);
                                 }
                             }
@@ -142,7 +143,8 @@ impl PdfParser {
             if let Ok(xobjects) = self.backend.page_xobjects(page_id) {
                 for xobj in xobjects {
                     let key = format!("page{}_{}", page_num, xobj.name);
-                    if let Some(resource) = Self::convert_xobject(xobj) {
+                    if let Some(mut resource) = Self::convert_xobject(xobj) {
+                        resource.page = Some(page_num);
                         resources.insert(key, resource);
                     }
                 }
@@ -153,6 +155,7 @@ impl PdfParser {
 
     /// Convert a raw XObject into a model Resource.
     fn convert_xobject(xobj: RawXObject) -> Option<Resource> {
+        if xobj.subtype != "Image" { return None; }
         let mime_type = match xobj.filter.as_deref() {
             Some("DCTDecode") => "image/jpeg",
             Some("JPXDecode") => "image/jp2",
@@ -261,7 +264,14 @@ pub(crate) fn parse_single_page(
     if options.extract_resources && options.extract_mode != ExtractMode::StructureOnly {
         let pages = backend.pages();
         if let Some(page_id) = pages.get(&page_num) {
+            let content = backend.page_content(*page_id)?;
+            page.image_resource_count = backend
+                .decode_content(&content)?
+                .iter()
+                .filter(|op| op.operator == "BI")
+                .count() as u32;
             if let Ok(xobjects) = backend.page_xobjects(*page_id) {
+                page.image_resource_count += xobjects.len() as u32;
                 for xobj in xobjects {
                     let base_id = format!("page{}_{}", page_num, xobj.name);
                     if let Some(resource) = convert_xobject_pub(xobj) {
@@ -313,6 +323,7 @@ pub(crate) fn parse_single_page(
 /// Free-function version of `PdfParser::convert_xobject` so `parse_single_page`
 /// (and other `run_stream` consumers) can use it without needing `&self`.
 pub(crate) fn convert_xobject_pub(xobj: RawXObject) -> Option<Resource> {
+    if xobj.subtype != "Image" { return None; }
     let mime_type = match xobj.filter.as_deref() {
         Some("DCTDecode") => "image/jpeg",
         Some("JPXDecode") => "image/jp2",

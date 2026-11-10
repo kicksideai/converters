@@ -53,6 +53,7 @@ entries:
       test: wippy.test:test
       doc2md: kickside.convert.doc2md:doc2md
       fixtures: app.env:doc2md_fixtures
+      pdf_pages: app.env:pdf_pages
 
   - name: doc2md_load_off
     kind: process.lua
@@ -86,3 +87,7 @@ entries:
     imports:
       test: wippy.test:test
       converter: kickside.convert.doc2md:doc2md
+
+  - name: pdf_pages
+    kind: library.lua
+    source: file://pdf_pages.lua

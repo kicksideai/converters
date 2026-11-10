@@ -106,6 +106,7 @@ pub fn convert(
                 let prefix = name.replace('/', "_");
                 for img in conv.images {
                     images.push(Image {
+                        page: None,
                         name: format!("{prefix}__{}", img.name),
                         data: img.data,
                     });

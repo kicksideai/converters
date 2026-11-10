@@ -91,7 +91,9 @@ embedded or displayed.
 
 `doc2md.page_resources(request)` accepts the same `bytes` or `url` request and
 returns `[{ page, text_len, image_count }, ...]`, with one-based page
-numbers. It helps callers select scanned pages for OCR.
+numbers. For PDFs, `image_count` counts every direct image and Form resource
+before image-size filtering; a Form may contain further images. It helps callers
+decide whether extracted images cover a page or a composite render is needed.
 
 ## Response
 
@@ -158,3 +160,5 @@ disabled.
 ## License
 
 [MIT License](../../LICENSE).
+
+PDF images carry an optional `page` number from the source PDF and appear in page order. Shared resources used on different pages return one image record per page association. Images from formats without PDF pages omit `page`. Image names and bytes retain their existing format.

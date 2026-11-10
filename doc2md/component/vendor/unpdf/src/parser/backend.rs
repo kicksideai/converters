@@ -359,7 +359,7 @@ impl PdfBackend for RawBackend {
                             .map(|n| String::from_utf8_lossy(n).to_string())
                             .unwrap_or_default();
 
-                        if subtype != "Image" {
+                        if subtype != "Image" && subtype != "Form" {
                             continue;
                         }
 
