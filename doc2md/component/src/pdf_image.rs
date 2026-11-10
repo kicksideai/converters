@@ -62,17 +62,27 @@ fn render_samples(
     }
 
     let max = ((1u32 << bits) - 1) as f32;
-    let pixel = |samples: &[u32]| -> [u8; 3] {
-        let components: Vec<f32> = samples
-            .iter()
-            .enumerate()
-            .map(|(i, s)| decode[2 * i] + *s as f32 * (decode[2 * i + 1] - decode[2 * i]) / max)
-            .collect();
-        space.to_rgb(&components).map(|v| (v * 255.0).round() as u8)
+    let mut components = vec![0.0; n];
+    let mut pixel = |samples: &[u32]| -> Option<[u8; 3]> {
+        for (i, s) in samples.iter().enumerate() {
+            components[i] = decode[2 * i] + *s as f32 * (decode[2 * i + 1] - decode[2 * i]) / max;
+        }
+        Some(
+            space
+                .to_rgb(&components)?
+                .map(|v| (v * 255.0).round() as u8),
+        )
     };
     // One-component samples of at most 8 bits take a lookup table per sample value.
-    let table: Option<Vec<[u8; 3]>> =
-        (n == 1 && bits <= 8).then(|| (0..=max as u32).map(|s| pixel(&[s])).collect());
+    let table: Option<Vec<[u8; 3]>> = if n == 1 && bits <= 8 {
+        Some(
+            (0..=max as u32)
+                .map(|s| pixel(&[s]))
+                .collect::<Option<Vec<_>>>()?,
+        )
+    } else {
+        None
+    };
 
     let mut out = Vec::with_capacity(w * h * channels);
     let mut samples = vec![0u32; n];
@@ -85,7 +95,7 @@ fn render_samples(
             }
             let rgb = match &table {
                 Some(table) => table[samples[0] as usize],
-                None => pixel(&samples),
+                None => pixel(&samples)?,
             };
             out.extend_from_slice(&rgb[..channels]);
         }
@@ -209,6 +219,10 @@ mod tests {
                 None => object.dict.as_bytes().to_vec(),
             });
         }
+        assemble_pdf(bodies)
+    }
+
+    fn assemble_pdf(bodies: Vec<Vec<u8>>) -> Vec<u8> {
         let mut pdf = b"%PDF-1.4\n".to_vec();
         let mut offsets = Vec::new();
         for (index, body) in bodies.iter().enumerate() {
@@ -417,5 +431,340 @@ mod tests {
             "got {:?}",
             converted.images.iter().map(|i| &i.name).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn special_separation_colorants_ignore_the_alternate_and_transform() {
+        for (name, expected) in [("All", vec![255, 127, 0]), ("None", vec![255, 255, 255])] {
+            let pdf = pdf_with_image(
+                &format!("/Width 3 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /{name} /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>]"),
+                &[0, 128, 255], "", &[]);
+            assert_eq!(
+                extracted_png(&pdf),
+                (png::ColorType::Grayscale, expected),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn calculator_comments_and_logical_shifts_produce_exact_pixels() {
+        for (program, expected) in [
+            (
+                &b"{ % tint to gray\r\n 1 exch sub % } ignored\n }"[..],
+                vec![255, 0],
+            ),
+            (
+                &b"{ pop -1 -1 bitshift 0 gt { 0 } { 1 } ifelse }"[..],
+                vec![0, 0],
+            ),
+        ] {
+            let pdf = pdf_with_image(
+                "/Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /Black /DeviceGray 6 0 R]",
+                &[0, 255], "", &[Object { dict: "/FunctionType 4 /Domain [0 1] /Range [0 1]", stream: Some(program) }]);
+            assert_eq!(extracted_png(&pdf), (png::ColorType::Grayscale, expected));
+        }
+    }
+
+    #[test]
+    fn cubic_sampled_functions_are_explicitly_unsupported() {
+        let pdf = pdf_with_image(
+            "/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /Black /DeviceGray 6 0 R]",
+            &[128], "", &[Object { dict: "/FunctionType 0 /Domain [0 1] /Range [0 1] /Size [4] /BitsPerSample 8 /Order 3", stream: Some(&[0, 255, 0, 255]) }]);
+        let doc =
+            unpdf::parse_bytes_with_options(&pdf, unpdf::ParseOptions::new().with_resources(true))
+                .unwrap();
+        assert!(doc.resources.values().all(|r| r.samples.is_none()));
+        assert_eq!(
+            crate::collect_page_resources(&pdf).unwrap()[0].image_count,
+            1
+        );
+    }
+
+    #[test]
+    fn icc_ranges_and_alternates_preserve_sample_mapping() {
+        for (profile, data, expected) in [
+            (
+                "/N 1 /Alternate /DeviceGray /Range [0 0.5]",
+                vec![0, 255],
+                vec![0, 128],
+            ),
+            ("/N 1 /Range [0.25 0.75]", vec![0, 255], vec![64, 191]),
+            ("/N 1 /Alternate /DeviceGray", vec![0, 255], vec![0, 255]),
+        ] {
+            let pdf = pdf_with_image(
+                "/Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/ICCBased 6 0 R]",
+                &data,
+                "",
+                &[Object {
+                    dict: profile,
+                    stream: Some(b"profile"),
+                }],
+            );
+            assert_eq!(
+                extracted_png(&pdf),
+                (png::ColorType::Grayscale, expected),
+                "{profile}"
+            );
+        }
+        let pdf = pdf_with_image(
+            "/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/ICCBased 6 0 R]",
+            &[255],
+            "",
+            &[Object {
+                dict: "/N 1 /Alternate /DeviceRGB",
+                stream: Some(b"profile"),
+            }],
+        );
+        let doc =
+            unpdf::parse_bytes_with_options(&pdf, unpdf::ParseOptions::new().with_resources(true))
+                .unwrap();
+        assert!(doc.resources.values().all(|r| r.samples.is_none()));
+    }
+
+    #[test]
+    fn stitching_two_and_sixteen_bit_samples_inverse_masks_and_stream_palettes() {
+        let stitched = pdf_with_image(
+            "/Width 3 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /Black /DeviceGray << /FunctionType 3 /Domain [0 1] /Functions [<< /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >> << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>] /Bounds [0.5] /Encode [0 1 0 1] >>]", &[0, 128, 255], "", &[]);
+        assert_eq!(
+            extracted_png(&stitched),
+            (png::ColorType::Grayscale, vec![255, 1, 255])
+        );
+        for (attributes, data, expected) in [
+            (
+                "/Width 3 /Height 2 /BitsPerComponent 2 /ColorSpace /DeviceGray",
+                vec![0x18, 0xe4],
+                vec![0, 85, 170, 255, 170, 85],
+            ),
+            (
+                "/Width 3 /Height 1 /BitsPerComponent 16 /ColorSpace /DeviceGray",
+                vec![0, 0, 128, 0, 255, 255],
+                vec![0, 128, 255],
+            ),
+            (
+                "/Width 3 /Height 2 /ImageMask true /Decode [1 0]",
+                vec![0xa0, 0x40],
+                vec![0, 255, 0, 255, 0, 255],
+            ),
+        ] {
+            assert_eq!(
+                extracted_png(&pdf_with_image(attributes, &data, "", &[])),
+                (png::ColorType::Grayscale, expected),
+                "{attributes}"
+            );
+        }
+        let palette = flate(&[255, 0, 0, 0, 0, 255]);
+        let pdf = pdf_with_image(
+            "/Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/Indexed /DeviceRGB 1 6 0 R]",
+            &[0, 1],
+            "",
+            &[Object {
+                dict: "/Filter /FlateDecode",
+                stream: Some(&palette),
+            }],
+        );
+        assert_eq!(
+            extracted_png(&pdf),
+            (png::ColorType::Rgb, vec![255, 0, 0, 0, 0, 255])
+        );
+    }
+
+    #[test]
+    fn single_element_encoded_filter_arrays_preserve_the_encoded_file() {
+        for (filter, ext) in [("JPXDecode", "jp2"), ("DCTDecode", "jpg")] {
+            let pdf = pdf_with_image(&format!("/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter [/{filter}]"), b"encoded", "", &[]);
+            let converted = convert_pdf(
+                &pdf,
+                Settings {
+                    extract_images: true,
+                    page_markers: false,
+                },
+            )
+            .unwrap();
+            assert_eq!(converted.images.len(), 1, "{filter}");
+            assert!(converted.images[0].name.ends_with(ext));
+            assert_eq!(converted.images[0].data, b"encoded");
+        }
+    }
+
+    #[test]
+    fn unsupported_filters_remain_in_resource_counts_without_fake_pixels() {
+        for filter in ["CCITTFaxDecode", "JBIG2Decode", "UnknownDecode"] {
+            let pdf = pdf_with_image(&format!("/Width 100 /Height 100 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /{filter}"), &[0x26, 0xa0, 0, 0x10], "", &[]);
+            let converted = convert_pdf(
+                &pdf,
+                Settings {
+                    extract_images: true,
+                    page_markers: true,
+                },
+            )
+            .unwrap();
+            assert!(converted.images.is_empty(), "{filter}");
+            let pages = crate::collect_page_resources(&pdf).unwrap();
+            assert_eq!(
+                (pages[0].image_count, pages[0].text_len),
+                (1, 0),
+                "{filter}"
+            );
+        }
+    }
+
+    #[test]
+    fn dropping_the_first_image_keeps_links_on_their_own_pages() {
+        let pdf = assemble_pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Bad 7 0 R >> >> /Contents 5 0 R >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Good 8 0 R >> >> /Contents 6 0 R >>".to_vec(),
+            stream_body("", b"q 100 0 0 100 0 0 cm /Bad Do Q"),
+            stream_body("", b"q 100 0 0 100 0 0 cm /Good Do Q"),
+            stream_body("/Type /XObject /Subtype /Image /Width 64 /Height 64 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /CCITTFaxDecode", &[0x26, 0xa0, 0, 0x10]),
+            stream_body("/Type /XObject /Subtype /Image /Width 64 /Height 64 /BitsPerComponent 8 /ColorSpace /DeviceRGB", &[10, 20, 30].repeat(64*64)),
+        ]);
+        let converted = convert_pdf(
+            &pdf,
+            Settings {
+                extract_images: true,
+                page_markers: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(converted.images.len(), 1);
+        let image = &converted.images[0];
+        assert_eq!(image.page, Some(2));
+        let link = converted
+            .markdown
+            .find(&format!("]({})", image.name))
+            .unwrap_or_else(|| panic!("{}", converted.markdown));
+        let marker = converted.markdown.find("<!-- page 2 -->").unwrap();
+        assert!(link > marker, "{}", converted.markdown);
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&image.data))
+            .read_info()
+            .unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut pixels).unwrap();
+        assert_eq!(pixels, [10, 20, 30].repeat(64 * 64));
+    }
+
+    #[test]
+    fn cmyk_and_devicen_allocation_counts_do_not_grow_with_pixel_count() {
+        use unpdf::model::{parse_calculator, Function};
+        let exponential = Function::Exponential {
+            domain: [0., 1.],
+            c0: vec![0.; 4],
+            c1: vec![1.; 4],
+            exponent: 1.,
+            range: None,
+        };
+        let functions = vec![
+            Function::Calculator {
+                domain: vec![0., 1., 0., 1.],
+                range: vec![0., 1., 0., 1., 0., 1., 0., 1.],
+                program: parse_calculator(b"{ 2 copy pop pop 0 0 }").unwrap(),
+            },
+            Function::Sampled {
+                domain: vec![0., 1., 0., 1.],
+                range: vec![0., 1., 0., 1., 0., 1., 0., 1.],
+                size: vec![2, 2],
+                bits_per_sample: 8,
+                encode: vec![0., 1., 0., 1.],
+                decode: vec![0., 1., 0., 1., 0., 1., 0., 1.],
+                samples: vec![0; 16],
+            },
+            exponential.clone(),
+            Function::Stitching {
+                domain: [0., 1.],
+                functions: vec![exponential.clone(), exponential],
+                bounds: vec![0.5],
+                encode: vec![0., 1., 0., 1.],
+                range: None,
+            },
+            Function::Array(
+                (0..4)
+                    .map(|_| Function::Exponential {
+                        domain: [0., 1.],
+                        c0: vec![0.],
+                        c1: vec![1.],
+                        exponent: 1.,
+                        range: None,
+                    })
+                    .collect(),
+            ),
+        ];
+        for space in
+            std::iter::once(ColorSpace::Cmyk).chain(functions.into_iter().map(|tint_transform| {
+                ColorSpace::DeviceN {
+                    components: 2,
+                    alternate: Box::new(ColorSpace::Cmyk),
+                    tint_transform,
+                }
+            }))
+        {
+            let n = space.components();
+            let layout = SampleLayout {
+                color_space: space,
+                decode: None,
+            };
+            let small = vec![0; n];
+            let large = vec![0; 4096 * n];
+            let (one, _) = crate::test_allocations::count(|| {
+                super::render_samples(&small, 1, 1, 8, &layout).unwrap()
+            });
+            let (many, (pixels, _)) = crate::test_allocations::count(|| {
+                super::render_samples(&large, 4096, 1, 8, &layout).unwrap()
+            });
+            assert_eq!(pixels, vec![255; 4096 * 3]);
+            assert_eq!(
+                many, one,
+                "{:?}: one={one}, many={many}",
+                layout.color_space
+            );
+            eprintln!(
+                "{one} allocations for 1 pixel; {many} for 4096 pixels: {:?}",
+                layout.color_space
+            );
+        }
+    }
+
+    #[test]
+    fn calculator_stack_overflow_rejects_samples_without_losing_the_page() {
+        let program = format!("{{ pop {} }}", "1 ".repeat(101));
+        let pdf = pdf_with_image(
+            "/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /Black /DeviceGray 6 0 R]",
+            &[128], "", &[Object {dict: "/FunctionType 4 /Domain [0 1] /Range [0 1]", stream: Some(program.as_bytes())}]);
+        let converted = convert_pdf(
+            &pdf,
+            Settings {
+                extract_images: true,
+                page_markers: true,
+            },
+        )
+        .unwrap();
+        assert!(converted.images.is_empty());
+        assert_eq!(
+            crate::collect_page_resources(&pdf).unwrap()[0].image_count,
+            1
+        );
+    }
+
+    #[test]
+    fn invalid_calculator_arithmetic_does_not_fabricate_pixels() {
+        for operation in ["0 0 div", "1 0 idiv", "1 0 mod", "-1 sqrt", "0 ln"] {
+            let program = format!("{{ pop {operation} }}");
+            let pdf = pdf_with_image("/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/Separation /Black /DeviceGray 6 0 R]", &[128], "", &[Object {dict: "/FunctionType 4 /Domain [0 1] /Range [0 1]", stream: Some(program.as_bytes())}]);
+            let converted = convert_pdf(
+                &pdf,
+                Settings {
+                    extract_images: true,
+                    page_markers: true,
+                },
+            )
+            .unwrap();
+            assert!(converted.images.is_empty(), "{operation}");
+            assert_eq!(
+                crate::collect_page_resources(&pdf).unwrap()[0].image_count,
+                1
+            );
+        }
     }
 }

@@ -15,12 +15,22 @@ pub struct SampleLayout {
 /// A resolved image color space.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ColorSpace {
-    /// DeviceGray, CalGray, or a one-component ICC profile.
+    /// DeviceGray or CalGray.
     Gray,
-    /// DeviceRGB, CalRGB, or a three-component ICC profile.
+    /// DeviceRGB or CalRGB.
     Rgb,
-    /// DeviceCMYK or a four-component ICC profile.
+    /// DeviceCMYK.
     Cmyk,
+    /// ICC profile component ranges and its device approximation.
+    Icc {
+        alternate: Box<ColorSpace>,
+        range: Vec<f32>,
+    },
+    /// The reserved colorants do not use a tint transform.
+    Separation {
+        name: String,
+        tint: Option<(Box<ColorSpace>, Function)>,
+    },
     Lab {
         white_point: [f32; 3],
         range: [f32; 4],
@@ -30,8 +40,7 @@ pub enum ColorSpace {
         hival: u32,
         lookup: Vec<u8>,
     },
-    /// Separation (one component) or DeviceN: colorants rendered through the
-    /// tint transform into the alternate space.
+    /// DeviceN colorants rendered through the tint transform into the alternate space.
     DeviceN {
         components: usize,
         alternate: Box<ColorSpace>,
@@ -42,7 +51,8 @@ pub enum ColorSpace {
 impl ColorSpace {
     pub fn components(&self) -> usize {
         match self {
-            ColorSpace::Gray | ColorSpace::Indexed { .. } => 1,
+            ColorSpace::Gray | ColorSpace::Indexed { .. } | ColorSpace::Separation { .. } => 1,
+            ColorSpace::Icc { alternate, .. } => alternate.components(),
             ColorSpace::Rgb | ColorSpace::Lab { .. } => 3,
             ColorSpace::Cmyk => 4,
             ColorSpace::DeviceN { components, .. } => *components,
@@ -51,14 +61,24 @@ impl ColorSpace {
 
     /// The `/Decode` array a sample buffer uses when the image declares none.
     pub fn default_decode(&self, bits_per_component: u8) -> Vec<f32> {
+        let mut decode = vec![0.0; 2 * self.components()];
+        self.default_decode_into(bits_per_component, &mut decode);
+        decode
+    }
+
+    fn default_decode_into(&self, bits: u8, decode: &mut [f32]) {
+        for pair in decode.chunks_exact_mut(2) {
+            pair.copy_from_slice(&[0.0, 1.0]);
+        }
         match self {
+            ColorSpace::Icc { range, .. } => decode.copy_from_slice(range),
             ColorSpace::Indexed { .. } => {
-                vec![0.0, ((1u32 << bits_per_component) - 1) as f32]
+                decode.copy_from_slice(&[0.0, ((1u32 << bits) - 1) as f32])
             }
             ColorSpace::Lab { range, .. } => {
-                vec![0.0, 100.0, range[0], range[1], range[2], range[3]]
+                decode.copy_from_slice(&[0.0, 100.0, range[0], range[1], range[2], range[3]])
             }
-            _ => [0.0, 1.0].repeat(self.components()),
+            _ => (),
         }
     }
 
@@ -66,6 +86,8 @@ impl ColorSpace {
     pub fn is_gray(&self) -> bool {
         match self {
             ColorSpace::Gray => true,
+            ColorSpace::Separation { tint, .. } => tint.as_ref().is_none_or(|(s, _)| s.is_gray()),
+            ColorSpace::Icc { alternate, .. } => alternate.is_gray(),
             ColorSpace::Indexed { base, .. }
             | ColorSpace::DeviceN {
                 alternate: base, ..
@@ -75,10 +97,24 @@ impl ColorSpace {
     }
 
     /// Converts color components to sRGB in [0, 1].
-    pub fn to_rgb(&self, components: &[f32]) -> [f32; 3] {
+    pub fn to_rgb(&self, components: &[f32]) -> Option<[f32; 3]> {
         let c = |i: usize| components.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-        match self {
+        Some(match self {
             ColorSpace::Gray => [c(0); 3],
+            ColorSpace::Icc { alternate, range } => {
+                let mut values = [0.0; 32];
+                let n = alternate.components();
+                values[..n].copy_from_slice(&components[..n]);
+                clip_to(&mut values[..n], range);
+                alternate.to_rgb(&values[..n])?
+            }
+            ColorSpace::Separation { name, tint: None } => {
+                if name == "All" {
+                    [1.0 - c(0); 3]
+                } else {
+                    [1.0; 3]
+                }
+            }
             ColorSpace::Rgb => [c(0), c(1), c(2)],
             ColorSpace::Cmyk => {
                 let k = c(3);
@@ -102,20 +138,29 @@ impl ColorSpace {
                     .round()
                     .clamp(0.0, *hival as f32) as usize;
                 let entry = lookup.get(index * n..index * n + n).unwrap_or(&[]);
-                let mut base_components = vec![0.0; n];
-                let decode = base.default_decode(8);
+                let mut base_components = [0.0; 32];
+                let mut decode = [0.0; 64];
+                base.default_decode_into(8, &mut decode[..2 * n]);
                 for (i, byte) in entry.iter().enumerate() {
                     let (lo, hi) = (decode[2 * i], decode[2 * i + 1]);
                     base_components[i] = lo + (*byte as f32 / 255.0) * (hi - lo);
                 }
-                base.to_rgb(&base_components)
+                base.to_rgb(&base_components[..n])?
             }
             ColorSpace::DeviceN {
                 alternate,
                 tint_transform,
                 ..
-            } => alternate.to_rgb(&tint_transform.eval(components)),
-        }
+            }
+            | ColorSpace::Separation {
+                tint: Some((alternate, tint_transform)),
+                ..
+            } => {
+                let mut values = [0.0; 32];
+                tint_transform.eval_into(components, &mut values[..alternate.components()])?;
+                alternate.to_rgb(&values[..alternate.components()])?
+            }
+        })
     }
 }
 
@@ -225,7 +270,26 @@ pub enum Function {
 }
 
 impl Function {
-    pub fn eval(&self, input: &[f32]) -> Vec<f32> {
+    pub fn eval(&self, input: &[f32]) -> Option<Vec<f32>> {
+        let mut output = vec![0.0; self.outputs()];
+        self.eval_into(input, &mut output)?;
+        Some(output)
+    }
+
+    pub fn outputs(&self) -> usize {
+        match self {
+            Self::Sampled { range, .. } | Self::Calculator { range, .. } => range.len() / 2,
+            Self::Exponential { c0, .. } => c0.len(),
+            Self::Stitching { functions, .. } => functions.first().map_or(0, Self::outputs),
+            Self::Array(functions) => functions.len(),
+        }
+    }
+
+    /// Evaluates into caller-owned output storage, without heap allocation.
+    pub fn eval_into(&self, input: &[f32], out: &mut [f32]) -> Option<()> {
+        if out.len() != self.outputs() {
+            return None;
+        }
         match self {
             Function::Sampled {
                 domain,
@@ -244,6 +308,7 @@ impl Function {
                 encode,
                 decode,
                 samples,
+                out,
             ),
             Function::Exponential {
                 domain,
@@ -258,11 +323,12 @@ impl Function {
                     .unwrap_or(0.0)
                     .clamp(domain[0], domain[1]);
                 let xn = x.powf(*exponent);
-                let mut out: Vec<f32> = c0.iter().zip(c1).map(|(a, b)| a + xn * (b - a)).collect();
-                if let Some(range) = range {
-                    clip_to(&mut out, range);
+                for ((value, a), b) in out.iter_mut().zip(c0).zip(c1) {
+                    *value = a + xn * (b - a);
                 }
-                out
+                if let Some(range) = range {
+                    clip_to(out, range);
+                }
             }
             Function::Stitching {
                 domain,
@@ -291,42 +357,38 @@ impl Function {
                     encode.get(2 * k).copied().unwrap_or(0.0),
                     encode.get(2 * k + 1).copied().unwrap_or(1.0),
                 );
-                let mut out = functions
-                    .get(k)
-                    .map(|f| f.eval(&[interpolate(x, lo, hi, e0, e1)]))
-                    .unwrap_or_default();
+                functions[k].eval_into(&[interpolate(x, lo, hi, e0, e1)], out)?;
                 if let Some(range) = range {
-                    clip_to(&mut out, range);
+                    clip_to(out, range);
                 }
-                out
             }
+
             Function::Calculator {
                 domain,
                 range,
                 program,
             } => {
-                let mut stack: Vec<PsValue> = input
-                    .iter()
-                    .enumerate()
-                    .map(|(i, x)| {
-                        let lo = domain.get(2 * i).copied().unwrap_or(f32::MIN);
-                        let hi = domain.get(2 * i + 1).copied().unwrap_or(f32::MAX);
-                        PsValue::Number(x.clamp(lo, hi) as f64)
-                    })
-                    .collect();
-                run_program(program, &mut stack);
-                let n = range.len() / 2;
-                let start = stack.len().saturating_sub(n);
-                let mut out: Vec<f32> = stack[start..].iter().map(|v| v.number() as f32).collect();
-                out.resize(n, 0.0);
-                clip_to(&mut out, range);
-                out
+                let mut stack = PsStack::new();
+                for (i, x) in input.iter().enumerate() {
+                    let lo = domain.get(2 * i).copied().unwrap_or(f32::MIN);
+                    let hi = domain.get(2 * i + 1).copied().unwrap_or(f32::MAX);
+                    stack.push(PsValue::Number(x.clamp(lo, hi) as f64))?;
+                }
+                run_program(program, &mut stack)?;
+                let start = stack.len().checked_sub(out.len())?;
+                out.fill(0.0);
+                for (value, result) in out.iter_mut().zip(&stack[start..]) {
+                    *value = result.number() as f32;
+                }
+                clip_to(out, range);
             }
-            Function::Array(functions) => functions
-                .iter()
-                .map(|f| f.eval(input).first().copied().unwrap_or(0.0))
-                .collect(),
+            Function::Array(functions) => {
+                for (f, value) in functions.iter().zip(out) {
+                    f.eval_into(input, std::slice::from_mut(value))?;
+                }
+            }
         }
+        Some(())
     }
 }
 
@@ -340,11 +402,12 @@ fn eval_sampled(
     encode: &[f32],
     decode: &[f32],
     samples: &[u8],
-) -> Vec<f32> {
+    out: &mut [f32],
+) {
     let m = size.len();
     let n = range.len() / 2;
-    let mut base = vec![0usize; m];
-    let mut frac = vec![0f32; m];
+    let mut base = [0usize; 32];
+    let mut frac = [0f32; 32];
     for i in 0..m {
         let x = input
             .get(i)
@@ -365,7 +428,7 @@ fn eval_sampled(
         }
     }
     let max_sample = ((1u64 << bits) - 1) as f32;
-    let mut out = vec![0f32; n];
+    out.fill(0.0);
     for corner in 0..(1usize << m) {
         let mut weight = 1.0;
         let mut index = 0usize;
@@ -391,8 +454,7 @@ fn eval_sampled(
         );
         *value = interpolate(*value, 0.0, max_sample, d0, d1);
     }
-    clip_to(&mut out, range);
-    out
+    clip_to(out, range);
 }
 
 /// A token of a type 4 (PostScript calculator) function program.
@@ -497,7 +559,12 @@ impl PsOperator {
 /// Parses a type 4 function program (`{ ... }`).
 pub fn parse_calculator(source: &[u8]) -> Option<Vec<PsOp>> {
     let text = std::str::from_utf8(source).ok()?;
-    let spaced = text.replace('{', " { ").replace('}', " } ");
+    let uncommented = text
+        .split(['\r', '\n'])
+        .map(|line| line.split('%').next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let spaced = uncommented.replace('{', " { ").replace('}', " } ");
     let mut tokens = spaced.split_whitespace();
     if tokens.next()? != "{" {
         return None;
@@ -569,36 +636,78 @@ impl PsValue {
     }
 }
 
-fn run_program(program: &[PsOp], stack: &mut Vec<PsValue>) {
-    for op in program {
-        match op {
-            PsOp::Number(n) => stack.push(PsValue::Number(*n)),
-            PsOp::Bool(b) => stack.push(PsValue::Bool(*b)),
-            PsOp::If(body) => {
-                if stack.pop().is_some_and(PsValue::truth) {
-                    run_program(body, stack);
-                }
-            }
-            PsOp::IfElse(then, otherwise) => {
-                if stack.pop().is_some_and(PsValue::truth) {
-                    run_program(then, stack);
-                } else {
-                    run_program(otherwise, stack);
-                }
-            }
-            PsOp::Operator(operator) => apply(*operator, stack),
+// PDF calculator functions have an operand stack limit of 100 (ISO 32000-1, Annex C).
+struct PsStack {
+    values: [PsValue; 100],
+    len: usize,
+}
+impl PsStack {
+    fn new() -> Self {
+        Self {
+            values: [PsValue::Number(0.0); 100],
+            len: 0,
+        }
+    }
+    fn push(&mut self, value: PsValue) -> Option<()> {
+        if matches!(value, PsValue::Number(n) if !n.is_finite()) {
+            return None;
+        }
+        *self.values.get_mut(self.len)? = value;
+        self.len += 1;
+        Some(())
+    }
+    fn pop(&mut self) -> Option<PsValue> {
+        if self.len == 0 {
+            None
+        } else {
+            self.len -= 1;
+            Some(self.values[self.len])
         }
     }
 }
+impl std::ops::Deref for PsStack {
+    type Target = [PsValue];
+    fn deref(&self) -> &[PsValue] {
+        &self.values[..self.len]
+    }
+}
+impl std::ops::DerefMut for PsStack {
+    fn deref_mut(&mut self) -> &mut [PsValue] {
+        &mut self.values[..self.len]
+    }
+}
 
-fn apply(operator: PsOperator, stack: &mut Vec<PsValue>) {
+fn run_program(program: &[PsOp], stack: &mut PsStack) -> Option<()> {
+    for op in program {
+        match op {
+            PsOp::Number(n) => stack.push(PsValue::Number(*n))?,
+            PsOp::Bool(b) => stack.push(PsValue::Bool(*b))?,
+            PsOp::If(body) => {
+                if stack.pop()?.truth() {
+                    run_program(body, stack)?;
+                }
+            }
+            PsOp::IfElse(then, otherwise) => {
+                if stack.pop()?.truth() {
+                    run_program(then, stack)?;
+                } else {
+                    run_program(otherwise, stack)?;
+                }
+            }
+            PsOp::Operator(operator) => apply(*operator, stack)?,
+        }
+    }
+    Some(())
+}
+
+fn apply(operator: PsOperator, stack: &mut PsStack) -> Option<()> {
     use PsOperator::*;
     use PsValue::{Bool, Number};
-    let pop = |stack: &mut Vec<PsValue>| stack.pop().unwrap_or(Number(0.0));
+    let pop = |stack: &mut PsStack| stack.pop();
     match operator {
         Abs | Ceiling | Cos | Cvi | Cvr | Floor | Ln | Log | Neg | Round | Sin | Sqrt
         | Truncate | Not => {
-            let a = pop(stack);
+            let a = pop(stack)?;
             let x = a.number();
             stack.push(match operator {
                 Abs => Number(x.abs()),
@@ -617,27 +726,19 @@ fn apply(operator: PsOperator, stack: &mut Vec<PsValue>) {
                     Number(_) => Number(!a.int() as f64),
                 },
                 _ => Number(x),
-            });
+            })?;
         }
         Add | Atan | Div | Exp | Idiv | Mod | Mul | Sub | And | Or | Xor | Bitshift | Eq | Ne
         | Ge | Gt | Le | Lt => {
-            let b = pop(stack);
-            let a = pop(stack);
+            let b = pop(stack)?;
+            let a = pop(stack)?;
             let (x, y) = (a.number(), b.number());
             stack.push(match operator {
                 Add => Number(x + y),
                 Atan => Number(x.atan2(y).to_degrees().rem_euclid(360.0)),
-                Div => Number(if y == 0.0 { 0.0 } else { x / y }),
-                Idiv => Number(if b.int() == 0 {
-                    0.0
-                } else {
-                    (a.int() / b.int()) as f64
-                }),
-                Mod => Number(if b.int() == 0 {
-                    0.0
-                } else {
-                    (a.int() % b.int()) as f64
-                }),
+                Div => Number(x / y),
+                Idiv => Number(a.int().checked_div(b.int())? as f64),
+                Mod => Number(a.int().checked_rem(b.int())? as f64),
                 Mul => Number(x * y),
                 Sub => Number(x - y),
                 And | Or | Xor => match (a, b) {
@@ -654,57 +755,137 @@ fn apply(operator: PsOperator, stack: &mut Vec<PsValue>) {
                 },
                 Bitshift => {
                     let shift = b.int();
-                    Number(if shift >= 0 {
-                        a.int() << shift.min(63)
+                    let value = a.int() as u32;
+                    let shifted = if !(-31..=31).contains(&shift) {
+                        0
+                    } else if shift >= 0 {
+                        value << shift
                     } else {
-                        a.int() >> (-shift).min(63)
-                    } as f64)
+                        value >> -shift
+                    };
+                    Number(shifted as i32 as f64)
                 }
-                Eq => Bool(x == y),
-                Ne => Bool(x != y),
+                Eq | Ne => {
+                    let equal = match (a, b) {
+                        (Bool(p), Bool(q)) => p == q,
+                        (Number(p), Number(q)) => p == q,
+                        _ => false,
+                    };
+                    Bool(if operator == Eq { equal } else { !equal })
+                }
                 Ge => Bool(x >= y),
                 Gt => Bool(x > y),
                 Le => Bool(x <= y),
                 Lt => Bool(x < y),
                 _ => Number(x.powf(y)),
-            });
+            })?;
         }
         Copy => {
-            let n = pop(stack).int().max(0) as usize;
-            let start = stack.len().saturating_sub(n);
-            let top: Vec<PsValue> = stack[start..].to_vec();
-            stack.extend(top);
+            let n = pop(stack)?.int().max(0) as usize;
+            let start = stack.len().checked_sub(n)?;
+            let end = stack.len();
+            for i in start..end {
+                let value = stack[i];
+                stack.push(value)?;
+            }
         }
         Dup => {
-            let top = stack.last().copied().unwrap_or(Number(0.0));
-            stack.push(top);
+            let top = stack.last().copied()?;
+            stack.push(top)?;
         }
         Exch => {
-            let b = pop(stack);
-            let a = pop(stack);
-            stack.push(b);
-            stack.push(a);
+            let b = pop(stack)?;
+            let a = pop(stack)?;
+            stack.push(b)?;
+            stack.push(a)?;
         }
         Index => {
-            let n = pop(stack).int().max(0) as usize;
-            let value = stack
-                .len()
-                .checked_sub(n + 1)
-                .map(|i| stack[i])
-                .unwrap_or(Number(0.0));
-            stack.push(value);
+            let n = pop(stack)?.int().max(0) as usize;
+            let value = stack.len().checked_sub(n + 1).map(|i| stack[i])?;
+            stack.push(value)?;
         }
         Pop => {
-            stack.pop();
+            stack.pop()?;
         }
         Roll => {
-            let j = pop(stack).int();
-            let n = pop(stack).int().max(0) as usize;
+            let j = pop(stack)?.int();
+            let n = pop(stack)?.int().max(0) as usize;
             if n > 0 && n <= stack.len() {
                 let start = stack.len() - n;
                 let shift = j.rem_euclid(n as i64) as usize;
                 stack[start..].rotate_right(shift);
             }
+        }
+    }
+    Some(())
+}
+
+#[cfg(test)]
+mod calculator_tests {
+    use super::*;
+
+    #[test]
+    fn every_calculator_operator_matches_postscript() {
+        for (program, expected) in [
+            ("-2 abs", 2.),
+            ("2 3 add", 5.),
+            ("1 0 atan", 90.),
+            ("1.2 ceiling", 2.),
+            ("60 cos", 0.5),
+            ("-1.8 cvi", -1.),
+            ("2 cvr", 2.),
+            ("5 2 div", 2.5),
+            ("2 3 exp", 8.),
+            ("-1.2 floor", -2.),
+            ("-5 2 idiv", -2.),
+            ("1 ln", 0.),
+            ("100 log", 2.),
+            ("5 2 mod", 1.),
+            ("2 3 mul", 6.),
+            ("2 neg", -2.),
+            ("-1.5 round", -1.),
+            ("30 sin", 0.5),
+            ("4 sqrt", 2.),
+            ("5 2 sub", 3.),
+            ("-1.8 truncate", -1.),
+            ("6 3 and", 2.),
+            ("true false and", 0.),
+            ("-1 -1 bitshift", 2147483647.),
+            ("1 32 bitshift", 0.),
+            ("-1 -32 bitshift", 0.),
+            ("1073741824 1 bitshift", -2147483648.),
+            ("2 2 eq", 1.),
+            ("true 1 eq", 0.),
+            ("false 0 ne", 1.),
+            ("2 1 ge", 1.),
+            ("2 1 gt", 1.),
+            ("1 2 le", 1.),
+            ("1 2 lt", 1.),
+            ("1 2 ne", 1.),
+            ("0 not", -1.),
+            ("false not", 1.),
+            ("4 2 or", 6.),
+            ("false true or", 1.),
+            ("7 3 xor", 4.),
+            ("true true xor", 0.),
+            ("1 2 2 copy add add add", 6.),
+            ("3 dup mul", 9.),
+            ("1 2 exch sub", 1.),
+            ("3 4 1 index", 3.),
+            ("1 2 pop", 1.),
+            ("1 2 3 3 1 roll", 2.),
+            ("true { 7 } if", 7.),
+            ("false { 2 } { 3 } ifelse", 3.),
+            ("true { 2 } { 3 } ifelse", 2.),
+        ] {
+            let program_ops = parse_calculator(format!("{{ {program} }}").as_bytes()).unwrap();
+            let mut stack = PsStack::new();
+            run_program(&program_ops, &mut stack).unwrap();
+            let got = stack.pop().unwrap().number();
+            assert!(
+                (got - expected).abs() < 1e-5,
+                "{program}: {got} != {expected}"
+            );
         }
     }
 }

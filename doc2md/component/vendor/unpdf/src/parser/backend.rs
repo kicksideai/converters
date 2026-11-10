@@ -368,7 +368,12 @@ impl PdfBackend for RawBackend {
                         }
 
                         let filter = raw_dict_get(dict, b"Filter")
-                            .and_then(|f| f.as_name())
+                            .and_then(|f| match self.doc.resolve(f) {
+                                RawPdfObject::Array(filters) if filters.len() == 1 => {
+                                    self.doc.resolve(&filters[0]).as_name()
+                                }
+                                filter => filter.as_name(),
+                            })
                             .map(|n| String::from_utf8_lossy(n).to_string());
 
                         let decoded = match filter.as_deref() {
@@ -1350,23 +1355,39 @@ fn resolve_color_space(
         }
         b"ICCBased" => {
             let dict = raw_resolve_dict(doc, params.first()?)?;
-            if let Some(alternate) = raw_dict_get(dict, b"Alternate") {
-                if let Some(space) = resolve_color_space(doc, alternate, named, depth + 1) {
-                    return Some(space);
-                }
+            let n = raw_dict_get(dict, b"N").and_then(|n| doc.resolve(n).as_i64())?;
+            let device = match n {
+                1 => ColorSpace::Gray,
+                3 => ColorSpace::Rgb,
+                4 => ColorSpace::Cmyk,
+                _ => return None,
+            };
+            let alternate = match raw_dict_get(dict, b"Alternate") {
+                Some(alternate) => resolve_color_space(doc, alternate, named, depth + 1)?,
+                None => device,
+            };
+            if alternate.components() != n as usize {
+                return None;
             }
-            match raw_dict_get(dict, b"N").and_then(|n| doc.resolve(n).as_i64())? {
-                1 => Some(ColorSpace::Gray),
-                3 => Some(ColorSpace::Rgb),
-                4 => Some(ColorSpace::Cmyk),
-                _ => None,
+            let range = match raw_dict_get(dict, b"Range") {
+                Some(r) => raw_numbers(doc, r)?,
+                None => [0.0, 1.0].repeat(n as usize),
+            };
+            if range.len() != 2 * n as usize || range.chunks_exact(2).any(|r| r[0] > r[1]) {
+                return None;
             }
+            Some(ColorSpace::Icc {
+                alternate: Box::new(alternate),
+                range,
+            })
         }
         b"Indexed" | b"I" => {
             let base = resolve_color_space(doc, params.first()?, named, depth + 1)?;
             let hival = doc.resolve(params.get(1)?).as_i64()?;
             let lookup = raw_stream_data(doc, params.get(2)?)?;
-            if !(0..=255).contains(&hival) || lookup.len() < (hival as usize + 1) * base.components() {
+            if !(0..=255).contains(&hival)
+                || lookup.len() < (hival as usize + 1) * base.components()
+            {
                 return None;
             }
             Some(ColorSpace::Indexed {
@@ -1376,6 +1397,19 @@ fn resolve_color_space(
             })
         }
         b"Separation" | b"DeviceN" => {
+            let colorant = if family == b"Separation" {
+                Some(String::from_utf8_lossy(doc.resolve(params.first()?).as_name()?).into_owned())
+            } else {
+                None
+            };
+            if let Some(name) = colorant.as_deref() {
+                if name == "All" || name == "None" {
+                    return Some(ColorSpace::Separation {
+                        name: name.to_string(),
+                        tint: None,
+                    });
+                }
+            }
             let components = if family == b"Separation" {
                 1
             } else {
@@ -1383,10 +1417,22 @@ fn resolve_color_space(
             };
             let alternate = resolve_color_space(doc, params.get(1)?, named, depth + 1)?;
             let tint_transform = resolve_function(doc, params.get(2)?, depth + 1)?;
-            Some(ColorSpace::DeviceN {
-                components,
-                alternate: Box::new(alternate),
-                tint_transform,
+            if components == 0
+                || components > 32
+                || tint_transform.outputs() != alternate.components()
+            {
+                return None;
+            }
+            Some(match colorant {
+                Some(name) => ColorSpace::Separation {
+                    name,
+                    tint: Some((Box::new(alternate), tint_transform)),
+                },
+                None => ColorSpace::DeviceN {
+                    components,
+                    alternate: Box::new(alternate),
+                    tint_transform,
+                },
             })
         }
         name if params.is_empty() => {
@@ -1404,24 +1450,44 @@ fn resolve_function(doc: &RawDocument, obj: &RawPdfObject, depth: usize) -> Opti
     }
     let obj = doc.resolve(obj);
     if let RawPdfObject::Array(items) = obj {
+        if items.is_empty() || items.len() > 32 {
+            return None;
+        }
         return items
             .iter()
             .map(|item| resolve_function(doc, item, depth + 1))
             .collect::<Option<Vec<_>>>()
+            .filter(|functions| functions.iter().all(|f| f.outputs() == 1))
             .map(Function::Array);
     }
     let dict = raw_resolve_dict(doc, obj)?;
     let numbers = |key: &[u8]| raw_dict_get(dict, key).and_then(|v| raw_numbers(doc, v));
     let domain = numbers(b"Domain")?;
     let range = numbers(b"Range");
+    if domain.is_empty()
+        || domain.len() % 2 != 0
+        || domain.len() > 64
+        || range
+            .as_ref()
+            .is_some_and(|r| r.is_empty() || r.len() % 2 != 0 || r.len() > 64)
+    {
+        return None;
+    }
     let pair = |values: &[f32]| -> Option<[f32; 2]> { values.get(..2)?.try_into().ok() };
     match raw_dict_get(dict, b"FunctionType").and_then(|t| doc.resolve(t).as_i64())? {
         0 => {
+            let order = raw_dict_get(dict, b"Order")
+                .map(|o| doc.resolve(o).as_i64())
+                .unwrap_or(Some(1))?;
+            if order != 1 {
+                return None;
+            }
             let range = range?;
             let size: Vec<u32> = numbers(b"Size")?.iter().map(|s| *s as u32).collect();
             let bits_per_sample =
                 raw_dict_get(dict, b"BitsPerSample").and_then(|b| doc.resolve(b).as_i64())? as u32;
             if size.is_empty()
+                || size.iter().any(|s| *s == 0)
                 || size.len() * 2 != domain.len()
                 || ![1, 2, 4, 8, 12, 16, 24, 32].contains(&bits_per_sample)
             {
@@ -1433,8 +1499,9 @@ fn resolve_function(doc: &RawDocument, obj: &RawPdfObject, depth: usize) -> Opti
                 return None;
             }
             Some(Function::Sampled {
-                encode: numbers(b"Encode")
-                    .unwrap_or_else(|| size.iter().flat_map(|s| [0.0, (*s as f32 - 1.0)]).collect()),
+                encode: numbers(b"Encode").unwrap_or_else(|| {
+                    size.iter().flat_map(|s| [0.0, (*s as f32 - 1.0)]).collect()
+                }),
                 decode: numbers(b"Decode").unwrap_or_else(|| range.clone()),
                 domain,
                 range,
@@ -1443,23 +1510,42 @@ fn resolve_function(doc: &RawDocument, obj: &RawPdfObject, depth: usize) -> Opti
                 samples,
             })
         }
-        2 => Some(Function::Exponential {
-            domain: pair(&domain)?,
-            c0: numbers(b"C0").unwrap_or_else(|| vec![0.0]),
-            c1: numbers(b"C1").unwrap_or_else(|| vec![1.0]),
-            exponent: raw_dict_get(dict, b"N").and_then(|n| doc.resolve(n).as_f32())?,
-            range,
-        }),
+        2 => {
+            let c0 = numbers(b"C0").unwrap_or_else(|| vec![0.0]);
+            let c1 = numbers(b"C1").unwrap_or_else(|| vec![1.0]);
+            if c0.is_empty() || c0.len() > 32 || c0.len() != c1.len() {
+                return None;
+            }
+            Some(Function::Exponential {
+                domain: pair(&domain)?,
+                c0,
+                c1,
+                exponent: raw_dict_get(dict, b"N").and_then(|n| doc.resolve(n).as_f32())?,
+                range,
+            })
+        }
+
         3 => {
             let functions = raw_dict_get(dict, b"Functions")
                 .and_then(|f| doc.resolve(f).as_array())?
                 .iter()
                 .map(|f| resolve_function(doc, f, depth + 1))
                 .collect::<Option<Vec<_>>>()?;
+            let bounds = numbers(b"Bounds")?;
+            let encode = numbers(b"Encode")?;
+            if functions.is_empty()
+                || functions
+                    .iter()
+                    .any(|f| f.outputs() != functions[0].outputs())
+                || bounds.len() + 1 != functions.len()
+                || encode.len() != 2 * functions.len()
+            {
+                return None;
+            }
             Some(Function::Stitching {
                 domain: pair(&domain)?,
-                bounds: numbers(b"Bounds")?,
-                encode: numbers(b"Encode")?,
+                bounds,
+                encode,
                 functions,
                 range,
             })

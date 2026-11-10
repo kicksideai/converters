@@ -73,12 +73,21 @@ render samples outside the 8-bit Device spaces.
 
 `RawXObject` and `Resource` now carry `samples: Option<SampleLayout>`, set only when
 the stream data is fully decoded and its color space resolves. `resolve_color_space`
-resolves DeviceGray/RGB/CMYK, CalGray, CalRGB, Lab, ICCBased (`/Alternate`, else
-`/N`), Indexed, Separation, DeviceN, and names from the page `/ColorSpace`
+resolves DeviceGray/RGB/CMYK, CalGray, CalRGB, Lab, ICCBased (`/N`, matching
+`/Alternate`, and `/Range`), Indexed, Separation, DeviceN, and names from the page `/ColorSpace`
 resources; image masks resolve to gray with one bit per sample. `resolve_function`
-parses the tint transforms: types 0, 2, 3, 4, and function arrays.
-`model::color` evaluates them (`Function::eval`, including the type 4 PostScript
-calculator), converts components to sRGB (`ColorSpace::to_rgb`), and reads packed
+parses the tint transforms: linear type 0 (rejecting unsupported `/Order` values),
+types 2, 3, 4, and function arrays. Separation retains its colorant name;
+`/All` and `/None` ignore the alternate and tint transform.
+`model::color` evaluates functions into caller-owned buffers (`Function::eval_into`,
+including the type 4 PostScript calculator with comments, logical 32-bit shifts,
+and a bounded operand stack), converts components to sRGB (`ColorSpace::to_rgb`), and reads packed
 1-16 bit samples (`read_sample`).
+
+Single-element `/DCTDecode` and `/JPXDecode` filter arrays retain their encoded
+format. Unsupported streams retain their page resource count without claiming
+decoded samples. Streamed and buffered parsing retain raw image resources and
+their block positions, allowing consumers to omit undecodable files without
+moving subsequent links. Stencil masks use black paint on white.
 
 No other unpdf sources are modified.

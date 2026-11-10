@@ -65,6 +65,20 @@ local function define()
                 test.eq(image.data:sub(1, 8), "\137PNG\r\n\26\n")
             end
         end)
+        test.it("counts an undecodable scanned page so uploads can render it", function()
+            local bytes = pdf_pages.image_pages({
+                { attributes = "/Width 8 /Height 8 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 8 /Rows 8 >>", data = string.char(38, 162, 255, 254, 0, 32, 2) },
+            })
+            local document, err = doc2md.convert({bytes = bytes}, {extract_images = true, page_markers = true})
+            test.is_nil(err)
+            test.eq(#document.images, 0)
+            local pages, scan_err = doc2md.page_resources({bytes = bytes})
+            test.is_nil(scan_err)
+            test.eq(#pages, 1)
+            test.eq(pages[1].page, 1)
+            test.eq(pages[1].image_count, 1)
+            test.eq(pages[1].text_len, 0)
+        end)
         test.it("counts every image resource and Form before size filtering", function()
             for _, form in ipairs({false, true}) do
                 local pages, err = doc2md.page_resources({bytes = pdf_pages.pdf({2,1}, form)})

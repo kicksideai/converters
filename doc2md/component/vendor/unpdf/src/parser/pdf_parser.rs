@@ -278,16 +278,7 @@ pub(crate) fn parse_single_page(
                 for xobj in xobjects {
                     let base_id = format!("page{}_{}", page_num, xobj.name);
                     if let Some(resource) = convert_xobject_pub(xobj) {
-                        // 뷰어가 렌더할 수 있는 이미지 포맷만 MD/디스크에 포함.
-                        // `.raw` (FlateDecode 등 미디코딩 픽셀버퍼) 는 대부분의
-                        // MD 뷰어가 표시 못하므로 broken icon 을 피하기 위해 제외.
-                        // 추후 Phase 에서 color_space + bits_per_component 기반
-                        // PNG 재구성으로 포괄 예정.
                         if !resource.is_image() {
-                            continue;
-                        }
-                        let ext = resource.extension();
-                        if ext == "raw" || ext == "bin" {
                             continue;
                         }
                         // 장식용 작은 이미지(로고, 구분선, 트래킹 픽셀 등) 제외.

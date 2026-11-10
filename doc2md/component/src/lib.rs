@@ -103,7 +103,7 @@ fn base_id(reference: &str) -> &str {
 
 // Replace unpdf's anonymous `<!-- [alt] -->` block-image placeholders, in document
 // order, with linked `![alt](name)` references to the extracted image files.
-fn link_placeholders(markdown: &str, ordered: &[(String, String)]) -> String {
+fn link_placeholders(markdown: &str, ordered: &[Option<String>]) -> String {
     let mut result = String::with_capacity(markdown.len());
     let mut rest = markdown;
     let mut index = 0;
@@ -116,8 +116,8 @@ fn link_placeholders(markdown: &str, ordered: &[(String, String)]) -> String {
         let end = after_open + close_rel + "] -->".len();
         result.push_str(&rest[..open]);
         match ordered.get(index) {
-            Some((_, name)) => result.push_str(&format!("![{}]({})", alt, name)),
-            None => result.push_str(&rest[open..end]),
+            Some(Some(name)) => result.push_str(&format!("![{}]({})", alt, name)),
+            _ => result.push_str(&rest[open..end]),
         }
         rest = &rest[end..];
         index += 1;
@@ -181,7 +181,7 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
     let mut keys: Vec<&String> = doc.resources.keys().collect();
     keys.sort_by_key(|id| (doc.resources[*id].page, *id));
 
-    let mut files: HashMap<String, (String, Vec<u8>)> = HashMap::new();
+    let mut files: HashMap<String, String> = HashMap::new();
     let mut images: Vec<types::Image> = Vec::new();
     for id in &keys {
         let resource = &doc.resources[*id];
@@ -192,18 +192,16 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
             continue;
         };
         let name = format!("{}.{}", sanitize(id), ext);
-        files.insert((*id).clone(), (name.clone(), bytes.clone()));
+        files.insert((*id).clone(), name.clone());
         images.push(types::Image { name, data: bytes, page: resource.page });
     }
 
-    let mut ordered: Vec<(String, String)> = Vec::new();
+    let mut ordered: Vec<Option<String>> = Vec::new();
     for page in &doc.pages {
         for block in &page.elements {
             if let unpdf::Block::Image { resource_id, .. } = block {
                 let key = base_id(resource_id);
-                if let Some((name, _)) = files.get(key) {
-                    ordered.push((key.to_string(), name.clone()));
-                }
+                ordered.push(files.get(key).cloned());
             }
         }
     }
@@ -784,7 +782,7 @@ mod tests {
     #[test]
     fn link_placeholders_links_in_order_and_keeps_unmatched() {
         let md = "a <!-- [Fig 1] --> b <!-- [Fig 2] --> c";
-        let ordered = vec![("k1".to_string(), "image1.png".to_string())];
+        let ordered = vec![Some("image1.png".to_string())];
         assert_eq!(
             link_placeholders(md, &ordered),
             "a ![Fig 1](image1.png) b <!-- [Fig 2] --> c"
@@ -1063,5 +1061,36 @@ mod tests {
         })
         .unwrap();
         assert!(doc.markdown.contains("<!-- page 1 -->"), "{}", doc.markdown);
+    }
+}
+
+#[cfg(test)]
+mod test_allocations {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    thread_local! {
+        static ENABLED: Cell<bool> = const { Cell::new(false) };
+        static COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+    struct CountingAllocator;
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if ENABLED.try_with(Cell::get).unwrap_or(false) { COUNT.with(|n| n.set(n.get() + 1)); }
+            System.alloc(layout)
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { System.dealloc(ptr, layout) }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            if ENABLED.try_with(Cell::get).unwrap_or(false) { COUNT.with(|n| n.set(n.get() + 1)); }
+            System.realloc(ptr, layout, size)
+        }
+    }
+    pub(crate) fn count<T>(f: impl FnOnce() -> T) -> (usize, T) {
+        COUNT.with(|n| n.set(0));
+        ENABLED.with(|enabled| enabled.set(true));
+        let result = f();
+        ENABLED.with(|enabled| enabled.set(false));
+        (COUNT.with(Cell::get), result)
     }
 }
