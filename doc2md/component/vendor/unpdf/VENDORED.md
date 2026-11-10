@@ -63,4 +63,22 @@ holds; `test_decode_ascii85_rejects_adobe_opening_wrapper_by_name` asserts the r
 names the wrapper across payload lengths, `z` payloads, and whitespace-separated and
 whitespace-prefixed wrappers.
 
+### 4. Image Sample Layouts (`src/model/color.rs`, `src/model/resource.rs`, `src/parser/backend.rs`, `src/parser/pdf_parser.rs`)
+
+Upstream reduced an image XObject's `/ColorSpace` to the family name of its first
+array element and replaced a stream it could not decompress with the still-encoded
+bytes. A consumer could not tell decoded samples from encoded bytes, and had no
+component count, alternate space, tint transform, palette, or `/Decode` array to
+render samples outside the 8-bit Device spaces.
+
+`RawXObject` and `Resource` now carry `samples: Option<SampleLayout>`, set only when
+the stream data is fully decoded and its color space resolves. `resolve_color_space`
+resolves DeviceGray/RGB/CMYK, CalGray, CalRGB, Lab, ICCBased (`/Alternate`, else
+`/N`), Indexed, Separation, DeviceN, and names from the page `/ColorSpace`
+resources; image masks resolve to gray with one bit per sample. `resolve_function`
+parses the tint transforms: types 0, 2, 3, 4, and function arrays.
+`model::color` evaluates them (`Function::eval`, including the type 4 PostScript
+calculator), converts components to sRGB (`ColorSpace::to_rgb`), and reads packed
+1-16 bit samples (`read_sample`).
+
 No other unpdf sources are modified.

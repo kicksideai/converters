@@ -6,6 +6,7 @@ mod escher;
 mod markdown;
 mod metafile;
 mod ole;
+mod pdf_image;
 mod ppt;
 mod rtf;
 mod sheet;
@@ -100,78 +101,6 @@ fn base_id(reference: &str) -> &str {
     }
 }
 
-fn encode_png(samples: &[u8], width: u32, height: u32, channels: usize) -> Option<Vec<u8>> {
-    let color = match channels {
-        1 => png::ColorType::Grayscale,
-        3 => png::ColorType::Rgb,
-        _ => return None,
-    };
-    let mut out = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut out, width, height);
-        encoder.set_color(color);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().ok()?;
-        writer.write_image_data(samples).ok()?;
-    }
-    Some(out)
-}
-
-fn cmyk_to_rgb(samples: &[u8]) -> Vec<u8> {
-    let mut rgb = Vec::with_capacity(samples.len() / 4 * 3);
-    for chunk in samples.chunks_exact(4) {
-        let (c, m, y, k) = (
-            chunk[0] as u32,
-            chunk[1] as u32,
-            chunk[2] as u32,
-            chunk[3] as u32,
-        );
-        rgb.push(((255 - c) * (255 - k) / 255) as u8);
-        rgb.push(((255 - m) * (255 - k) / 255) as u8);
-        rgb.push(((255 - y) * (255 - k) / 255) as u8);
-    }
-    rgb
-}
-
-// Produce a viewable file (bytes, extension) from a PDF image resource. JPEG/PNG
-// streams pass through; raw DeviceRGB/DeviceGray/DeviceCMYK 8-bit sample buffers
-// are wrapped into a PNG; anything else is returned as-is.
-fn pdf_image_file(resource: &unpdf::Resource) -> (Vec<u8>, &'static str) {
-    match resource.mime_type.as_str() {
-        "image/jpeg" => return (resource.data.clone(), "jpg"),
-        "image/png" => return (resource.data.clone(), "png"),
-        "image/gif" => return (resource.data.clone(), "gif"),
-        "image/tiff" => return (resource.data.clone(), "tiff"),
-        _ => {}
-    }
-
-    if let (Some(width), Some(height), Some(8)) =
-        (resource.width, resource.height, resource.bits_per_component)
-    {
-        let pixels = width as usize * height as usize;
-        let space = resource.color_space.as_deref().unwrap_or("");
-        let (samples, channels) = match space {
-            "DeviceRGB" | "RGB" | "CalRGB" if resource.data.len() == pixels * 3 => {
-                (resource.data.clone(), 3)
-            }
-            "DeviceGray" | "Gray" | "CalGray" if resource.data.len() == pixels => {
-                (resource.data.clone(), 1)
-            }
-            "DeviceCMYK" | "CMYK" if resource.data.len() == pixels * 4 => {
-                (cmyk_to_rgb(&resource.data), 3)
-            }
-            _ => (Vec::new(), 0),
-        };
-        if channels != 0 {
-            if let Some(png) = encode_png(&samples, width, height, channels) {
-                return (png, "png");
-            }
-        }
-    }
-
-    (resource.data.clone(), "bin")
-}
-
 // Replace unpdf's anonymous `<!-- [alt] -->` block-image placeholders, in document
 // order, with linked `![alt](name)` references to the extracted image files.
 fn link_placeholders(markdown: &str, ordered: &[(String, String)]) -> String {
@@ -259,7 +188,9 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
         if !resource.is_image() {
             continue;
         }
-        let (bytes, ext) = pdf_image_file(resource);
+        let Some((bytes, ext)) = pdf_image::image_file(resource) else {
+            continue;
+        };
         let name = format!("{}.{}", sanitize(id), ext);
         files.insert((*id).clone(), (name.clone(), bytes.clone()));
         images.push(types::Image { name, data: bytes, page: resource.page });
@@ -673,78 +604,6 @@ mod tests {
     }
 
     #[test]
-    fn cmyk_to_rgb_mid_range_values() {
-        // R=(255-100)*(255-20)/255=142, G=(255-50)*235/255=188, B=(255-10)*235/255=225
-        assert_eq!(cmyk_to_rgb(&[100, 50, 10, 20]), vec![142, 188, 225]);
-    }
-
-    #[test]
-    fn encode_png_supports_grayscale_and_rgb() {
-        assert_eq!(
-            &encode_png(&[128], 1, 1, 1).unwrap()[0..8],
-            b"\x89PNG\r\n\x1a\n"
-        );
-        assert_eq!(
-            &encode_png(&[1, 2, 3], 1, 1, 3).unwrap()[0..8],
-            b"\x89PNG\r\n\x1a\n"
-        );
-        assert!(encode_png(&[0, 0], 1, 1, 2).is_none());
-    }
-
-    #[test]
-    fn pdf_image_file_passthrough_and_raw_samples() {
-        use unpdf::Resource;
-        assert_eq!(
-            pdf_image_file(&Resource::image(b"j".to_vec(), "image/jpeg")).1,
-            "jpg"
-        );
-        assert_eq!(
-            pdf_image_file(&Resource::image(b"p".to_vec(), "image/png")).1,
-            "png"
-        );
-        assert_eq!(
-            pdf_image_file(&Resource::image(b"g".to_vec(), "image/gif")).1,
-            "gif"
-        );
-        assert_eq!(
-            pdf_image_file(&Resource::image(b"t".to_vec(), "image/tiff")).1,
-            "tiff"
-        );
-
-        let rgb = Resource::image(vec![10, 20, 30], "")
-            .with_dimensions(1, 1)
-            .with_color_space("DeviceRGB")
-            .with_bits_per_component(8);
-        let (bytes, ext) = pdf_image_file(&rgb);
-        assert_eq!(ext, "png");
-        assert_eq!(&bytes[0..8], b"\x89PNG\r\n\x1a\n");
-
-        let gray = Resource::image(vec![128], "")
-            .with_dimensions(1, 1)
-            .with_color_space("DeviceGray")
-            .with_bits_per_component(8);
-        assert_eq!(pdf_image_file(&gray).1, "png");
-
-        let cmyk = Resource::image(vec![0, 0, 0, 0], "")
-            .with_dimensions(1, 1)
-            .with_color_space("DeviceCMYK")
-            .with_bits_per_component(8);
-        assert_eq!(pdf_image_file(&cmyk).1, "png");
-
-        // unknown mime, no dimensions -> raw bytes
-        assert_eq!(
-            pdf_image_file(&Resource::image(vec![1, 2, 3], "x/y")).1,
-            "bin"
-        );
-        // dimensions present but byte count mismatched -> raw bytes
-        let bad = Resource::image(vec![1, 2], "")
-            .with_dimensions(5, 5)
-            .with_color_space("DeviceRGB")
-            .with_bits_per_component(8);
-        assert_eq!(pdf_image_file(&bad).1, "bin");
-    }
-
-    #[test]
     fn guest_convert_accepts_raw_bytes() {
         let doc = <Component as Guest>::convert(request(
             include_bytes!("../tests/assets/doc.doc"),
@@ -920,20 +779,6 @@ mod tests {
     fn base_id_drops_last_extension_only() {
         assert_eq!(base_id("page1.Im2.jpg"), "page1.Im2");
         assert_eq!(base_id("noext"), "noext");
-    }
-
-    #[test]
-    fn cmyk_to_rgb_converts_known_values() {
-        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 0]), vec![255, 255, 255]); // no ink => white
-        assert_eq!(cmyk_to_rgb(&[255, 0, 0, 0]), vec![0, 255, 255]); // full cyan
-        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 255]), vec![0, 0, 0]); // full black
-    }
-
-    #[test]
-    fn encode_png_emits_valid_png_and_rejects_bad_channels() {
-        let png = encode_png(&[10, 20, 30], 1, 1, 3).unwrap();
-        assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
-        assert!(encode_png(&[0, 0], 1, 1, 2).is_none()); // unsupported channel count
     }
 
     #[test]

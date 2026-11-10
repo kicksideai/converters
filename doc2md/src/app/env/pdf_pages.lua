@@ -1,4 +1,16 @@
 -- SPDX-License-Identifier: MIT
+local function assemble(objects: { string }): string
+    local output, offsets, length = {"%PDF-1.4\n"}, {}, 9
+    for index, body in ipairs(objects) do
+        offsets[index] = length
+        local object = index .. " 0 obj\n" .. body .. "\nendobj\n"
+        output[#output + 1], length = object, length + #object
+    end
+    output[#output + 1] = "xref\n0 " .. (#objects + 1) .. "\n0000000000 65535 f \n"
+    for _, offset in ipairs(offsets) do output[#output + 1] = string.format("%010d 00000 n \n", offset) end
+    output[#output + 1] = "trailer\n<< /Size " .. (#objects + 1) .. " /Root 1 0 R >>\nstartxref\n" .. length .. "\n%%EOF\n"
+    return table.concat(output)
+end
 local function pdf(image_counts: { integer }, form: boolean?, inline: boolean?): string
     local objects = { "<< /Type /Catalog /Pages 2 0 R >>", "" }
     local function add(body: string): integer objects[#objects + 1] = body; return #objects end
@@ -28,15 +40,31 @@ local function pdf(image_counts: { integer }, form: boolean?, inline: boolean?):
         kids[#kids + 1] = id .. " 0 R"
     end
     objects[2] = "<< /Type /Pages /Count " .. #image_counts .. " /Kids [" .. table.concat(kids, " ") .. "] >>"
-    local output, offsets, length = {"%PDF-1.4\n"}, {}, 9
-    for index, body in ipairs(objects) do
-        offsets[index] = length
-        local object = index .. " 0 obj\n" .. body .. "\nendobj\n"
-        output[#output + 1], length = object, length + #object
-    end
-    output[#output + 1] = "xref\n0 " .. (#objects + 1) .. "\n0000000000 65535 f \n"
-    for _, offset in ipairs(offsets) do output[#output + 1] = string.format("%010d 00000 n \n", offset) end
-    output[#output + 1] = "trailer\n<< /Size " .. (#objects + 1) .. " /Root 1 0 R >>\nstartxref\n" .. length .. "\n%%EOF\n"
-    return table.concat(output)
+    return assemble(objects)
 end
-return { pdf = pdf }
+
+-- One page per image. `{N}` in an image's attributes names the id of its Nth extra object.
+type ImageObject = { attributes: string, body: string? }
+type ImageSpec = { attributes: string, data: string, objects: { ImageObject }? }
+local function image_pages(images: { ImageSpec }): string
+    local objects = { "<< /Type /Catalog /Pages 2 0 R >>", "" }
+    local function add(body: string): integer objects[#objects + 1] = body; return #objects end
+    local function stream(body: string, attributes: string): integer
+        return add("<< /Length " .. #body .. " " .. attributes .. " >>\nstream\n" .. body .. "\nendstream")
+    end
+    local kids = {}
+    for _, image in ipairs(images) do
+        local attributes = image.attributes
+        for index, object in ipairs(image.objects or {}) do
+            local id = object.body and stream(object.body, object.attributes) or add(object.attributes)
+            attributes = attributes:gsub("{" .. index .. "}", id .. " 0 R")
+        end
+        local xobject = stream(image.data, "/Type /XObject /Subtype /Image " .. attributes)
+        local contents = stream("q 100 0 0 100 0 0 cm /Im Do Q", "")
+        kids[#kids + 1] = add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im " .. xobject .. " 0 R >> >> /Contents " .. contents .. " 0 R >>") .. " 0 R"
+    end
+    objects[2] = "<< /Type /Pages /Count " .. #images .. " /Kids [" .. table.concat(kids, " ") .. "] >>"
+    return assemble(objects)
+end
+
+return { pdf = pdf, image_pages = image_pages }

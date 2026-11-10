@@ -171,6 +171,9 @@ impl PdfParser {
         if let Some(cs) = xobj.color_space {
             resource = resource.with_color_space(cs);
         }
+        if let Some(layout) = xobj.samples {
+            resource = resource.with_samples(layout);
+        }
         Some(resource)
     }
 
@@ -338,6 +341,9 @@ pub(crate) fn convert_xobject_pub(xobj: RawXObject) -> Option<Resource> {
     }
     if let Some(cs) = xobj.color_space {
         resource = resource.with_color_space(cs);
+    }
+    if let Some(layout) = xobj.samples {
+        resource = resource.with_samples(layout);
     }
     Some(resource)
 }

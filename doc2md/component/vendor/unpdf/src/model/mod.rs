@@ -4,6 +4,7 @@
 //! PDF parsing and content rendering. The model is format-agnostic and
 //! can represent content from any PDF document.
 
+mod color;
 mod document;
 mod form;
 mod page;
@@ -12,6 +13,7 @@ mod quality;
 mod resource;
 mod table;
 
+pub use color::{parse_calculator, read_sample, ColorSpace, Function, PsOp, PsOperator, SampleLayout};
 pub use document::{Document, Metadata, Outline, OutlineItem};
 pub use form::{FieldType, FieldValue, FormField};
 pub use page::{Block, Page};

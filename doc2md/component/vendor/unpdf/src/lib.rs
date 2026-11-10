@@ -51,9 +51,9 @@ pub use detect::{detect_format_from_bytes, PdfFormat};
 pub use detect::{detect_format_from_path, is_pdf};
 pub use error::{Error, Result};
 pub use model::{
-    Alignment, Block, Document, ExtractionQuality, FieldType, FieldValue, FormField, InlineContent,
+    Alignment, Block, ColorSpace, Document, ExtractionQuality, FieldType, FieldValue, FormField, InlineContent,
     ListInfo, Metadata, Outline, Page, Paragraph, ParagraphStyle, QualityAccumulator, Resource,
-    ResourceType, Table, TableCell, TableRow, TextRun, TextStyle,
+    ResourceType, SampleLayout, Table, TableCell, TableRow, TextRun, TextStyle,
 };
 pub use parser::{PageStreamOptions, ParseEvent, ParseOptions, PdfParser};
 pub use render::{
