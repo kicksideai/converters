@@ -1,10 +1,11 @@
 -- SPDX-License-Identifier: MIT
-local function pdf(image_counts: { integer }, form: boolean?, inline: boolean?): string
+local function pdf(image_counts: { integer }, form: boolean?, inline: boolean?, texts: { string }?): string
     local objects = { "<< /Type /Catalog /Pages 2 0 R >>", "" }
     local function add(body: string): integer objects[#objects + 1] = body; return #objects end
     local function stream(body: string, attributes: string): integer
         return add("<< /Length " .. #body .. " " .. attributes .. " >>\nstream\n" .. body .. "\nendstream")
     end
+    local font = texts and add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
     local kids = {}
     local shared = stream(string.rep("\127", 16), "/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8")
     for page, count in ipairs(image_counts) do
@@ -23,8 +24,12 @@ local function pdf(image_counts: { integer }, form: boolean?, inline: boolean?):
         if inline then
             commands[#commands + 1] = "q 100 0 0 100 200 200 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \127 EI Q"
         end
+        if texts and texts[page] then
+            local text = texts[page]:gsub("\\", "\\\\"):gsub("%(", "\\("):gsub("%)", "\\)")
+            commands[#commands + 1] = "BT /F1 12 Tf 40 740 Td (" .. text .. ") Tj ET"
+        end
         local contents = stream(table.concat(commands, "\n"), "")
-        local id = add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << " .. table.concat(resources, " ") .. " >> >> /Contents " .. contents .. " 0 R >>")
+        local id = add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << " .. table.concat(resources, " ") .. " >> " .. (font and "/Font << /F1 " .. font .. " 0 R >> " or "") .. ">> /Contents " .. contents .. " 0 R >>")
         kids[#kids + 1] = id .. " 0 R"
     end
     objects[2] = "<< /Type /Pages /Count " .. #image_counts .. " /Kids [" .. table.concat(kids, " ") .. "] >>"
