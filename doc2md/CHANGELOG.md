@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.18](https://github.com/kicksideai/converters/compare/doc2md-v0.8.17...doc2md-v0.8.18) (2026-11-10)
+
+
+### Bug Fixes
+
+* **doc2md:** preserve PDF image page identity ([#13](https://github.com/kicksideai/converters/issues/13)) ([1f3a0ff](https://github.com/kicksideai/converters/commit/1f3a0ff7f5a401d5f251823bfb6c3302fbf24796))
+
 ## [0.8.17](https://github.com/kicksideai/converters/compare/doc2md-v0.8.16...doc2md-v0.8.17) (2026-11-04)
 
 
