@@ -264,8 +264,14 @@ pub(crate) fn parse_single_page(
     if options.extract_resources && options.extract_mode != ExtractMode::StructureOnly {
         let pages = backend.pages();
         if let Some(page_id) = pages.get(&page_num) {
+            let content = backend.page_content(*page_id)?;
+            page.image_resource_count = backend
+                .decode_content(&content)?
+                .iter()
+                .filter(|op| op.operator == "BI")
+                .count() as u32;
             if let Ok(xobjects) = backend.page_xobjects(*page_id) {
-                page.image_resource_count = xobjects.len() as u32;
+                page.image_resource_count += xobjects.len() as u32;
                 for xobj in xobjects {
                     let base_id = format!("page{}_{}", page_num, xobj.name);
                     if let Some(resource) = convert_xobject_pub(xobj) {

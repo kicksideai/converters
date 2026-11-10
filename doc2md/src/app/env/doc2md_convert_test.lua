@@ -54,6 +54,12 @@ local function define()
                 test.eq(pages[2].image_count, form and 2 or 1)
             end
         end)
+        test.it("counts inline images even without direct image resources", function()
+            local pages, err = doc2md.page_resources({bytes = pdf_pages.pdf({1,0}, false, true)})
+            test.is_nil(err)
+            test.eq(pages[1].image_count, 2)
+            test.eq(pages[2].image_count, 1)
+        end)
         test.it("preserves optional page identity through the Lua normalizer", function()
             local document, err = fake(function()
                 return {ok = {markdown = "", images = {{name = "scan.png", data = "bytes", page = 12}, {name = "figure.png", data = "bytes"}}}}, nil
