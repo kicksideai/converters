@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.19](https://github.com/kicksideai/converters/compare/doc2md-v0.8.18...doc2md-v0.8.19) (2026-11-10)
+
+
+### Bug Fixes
+
+* **doc2md:** encode PDF image samples in every color space as PNG ([#16](https://github.com/kicksideai/converters/issues/16)) ([f97678b](https://github.com/kicksideai/converters/commit/f97678be3ff19ae5eec748846ef056bce0c93b3d))
+* **doc2md:** keep page markers outside page cleanup ([#19](https://github.com/kicksideai/converters/issues/19)) ([e5a20ca](https://github.com/kicksideai/converters/commit/e5a20ca34e13bedcbda935b8ed8a7a586d095ed5))
+* **doc2md:** speed up scanned PDFs and respect caller budgets ([#14](https://github.com/kicksideai/converters/issues/14)) ([0956091](https://github.com/kicksideai/converters/commit/0956091f0cc39795f70e8555526aef42652d88da))
+
 ## [0.8.18](https://github.com/kicksideai/converters/compare/doc2md-v0.8.17...doc2md-v0.8.18) (2026-11-10)
 
 
