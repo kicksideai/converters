@@ -39,9 +39,13 @@ local function open_doc(ref: types.RasterizeRef): (types.PdfDocument?, error | s
             return nil, "rasterize: ref needs storage_id/storage_path, url, or bytes"
         end
         local storage, storage_err = fs.get(storage_id :: string)
-        if storage_err or not storage then return nil, "rasterize: storage unavailable: " .. tostring(storage_err) end
-        if not storage:exists(storage_path :: string) then return nil, "rasterize: source not found in storage" end
-        local content = storage:readfile(storage_path :: string)
+        if storage_err ~= nil then return nil, storage_err end
+        if not storage then
+            return nil, errors.new({message = "rasterize: storage unavailable", kind = errors.INTERNAL,
+                retryable = false, details = {code = "storage_unavailable"}})
+        end
+        local content, read_err = storage:readfile(storage_path :: string)
+        if read_err ~= nil then return nil, read_err end
         if type(content) ~= "string" or content == "" then return nil, "rasterize: failed to read source bytes" end
         bytes = content
     end

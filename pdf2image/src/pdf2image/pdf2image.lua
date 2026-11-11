@@ -275,8 +275,7 @@ local function new(runtime: Runtime?): any
 
         local result, err = funcs.call(PAGES, blob)
         if err ~= nil then
-            return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
-                message = tostring(err), details = {code = "internal"}}) :: error)
+            return nil, err
         end
 
         if type(result) ~= "table" then
@@ -303,8 +302,7 @@ local function new(runtime: Runtime?): any
 
             local res, call_err = funcs.call(RENDER, blob, zero_based_pages, options)
             if call_err ~= nil then
-                return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
-                message = tostring(call_err), details = {code = "internal"}}) :: error)
+                return nil, call_err
             end
 
             if type(res) ~= "table" then
