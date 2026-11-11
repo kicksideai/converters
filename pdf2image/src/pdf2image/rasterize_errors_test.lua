@@ -4,6 +4,7 @@ local adapter = require("adapter")
 local fixture = require("fixture")
 local funcs = require("funcs")
 local samples = require("samples")
+local storage = require("storage")
 return {run = test.run_cases(function()
     test.describe("Rasterizer native failures", function()
         for _, stage in ipairs({"open", "render"}) do
@@ -18,6 +19,18 @@ return {run = test.run_cases(function()
                     test.eq(result.err.code, spec[3])
                 end)
             end
+        end
+        for _, stage in ipairs({"acquire", "read"}) do
+            test.it("preserves a transient storage failure during " .. stage, function()
+                storage.stage = stage
+                storage.err = errors.new({message = "storage temporarily unavailable", kind = errors.UNAVAILABLE,
+                    retryable = true, details = {code = "storage_unavailable"}})
+                local result = adapter.run({ref = {storage_id = "app:source", storage_path = "document.pdf"}, pages = {1}})
+                test.eq(result.err.message, storage.err:message())
+                test.eq(result.err.kind, storage.err:kind())
+                test.eq(result.err.retryable, storage.err:retryable())
+                test.eq(result.err.code, storage.err:details().code)
+            end)
         end
         test.it("keeps corrupt documents permanent through the installed adapter", function()
             local result = assert(funcs.call("kickside.convert.pdf2image:rasterize", {ref = {bytes = "corrupt PDF"}, count_only = true}))

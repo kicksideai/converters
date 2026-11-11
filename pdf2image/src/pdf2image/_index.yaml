@@ -146,8 +146,8 @@ entries:
     kind: library.lua
     meta: {type: test_helper}
     source: file://rasterize_adapter.lua
-    modules: [fs]
     imports:
+      fs: kickside.convert.pdf2image:rasterize_storage_fixture
       pdf2image: kickside.convert.pdf2image:rasterize_error_fixture
       types: kickside.convert.pdf2image:types
   - name: rasterize_errors_test
@@ -161,7 +161,13 @@ entries:
       adapter: kickside.convert.pdf2image:rasterize_error_adapter
       fixture: kickside.convert.pdf2image:rasterize_error_fixture
       samples: kickside.convert.pdf2image:fixtures
+      storage: kickside.convert.pdf2image:rasterize_storage_fixture
 
   - name: types
     kind: library.lua
     source: file://types.lua
+
+  - name: rasterize_storage_fixture
+    kind: library.lua
+    meta: {type: test_helper}
+    source: file://rasterize_storage_fixture.lua
