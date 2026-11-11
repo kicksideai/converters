@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: MIT
 type RasterizeRef = {storage_id: string?, storage_path: string?, url: string?, bytes: string?}
 type RasterizeOptions = {dpi: number?, format: string?, quality: number?, pages: {number} | string?}
 type RasterizeRequest = RasterizeOptions & {ref: RasterizeRef, count_only: boolean?}

@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: MIT
 local test = require("test")
 local adapter = require("adapter")
 local fixture = require("fixture")

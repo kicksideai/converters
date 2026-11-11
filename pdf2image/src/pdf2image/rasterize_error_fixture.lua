@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: MIT
 local types = require("types")
 local M: {stage: string, err: error?} = {stage = "open"}
 function M.open(_ref: types.RasterizeRef): (types.PdfDocument?, error?)
