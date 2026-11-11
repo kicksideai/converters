@@ -74,7 +74,7 @@ entries:
       comment: convert.rasterizer adapter; resolves a content pointer (storage volume+path, url, or bytes) and renders pages to images.
     source: file://rasterize_adapter.lua
     method: run
-    modules: [fs]
+    modules: [fs, logger]
     imports:
       pdf2image: kickside.convert.pdf2image:pdf2image
       types: kickside.convert.pdf2image:types
@@ -141,11 +141,13 @@ entries:
     meta: {type: test_helper}
     source: file://rasterize_error_fixture.lua
     imports:
+      converter: kickside.convert.pdf2image:pdf2image
       types: kickside.convert.pdf2image:types
   - name: rasterize_error_adapter
     kind: library.lua
     meta: {type: test_helper}
     source: file://rasterize_adapter.lua
+    modules: [logger]
     imports:
       fs: kickside.convert.pdf2image:rasterize_storage_fixture
       pdf2image: kickside.convert.pdf2image:rasterize_error_fixture

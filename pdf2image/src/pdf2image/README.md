@@ -103,10 +103,20 @@ Every failure returns `nil, err` with a native runtime error. Read
 | `internal` | `errors.INTERNAL` | `true` |
 
 Native function-call errors retain their original kind, retryability, code and
-message through both page counting and rendering. The rasterizer adapter also
-preserves storage acquisition and read errors. Its error envelope keeps
-`message` and adds `kind`, `retryable` and `code`; input-validation strings alone
-map to permanent `INVALID/invalid_input`.
+message through both page counting and rendering. The rasterizer adapter always
+returns `message`, `kind`, boolean `retryable` and string `code`. Native values
+remain unchanged when present. Missing metadata uses this table once, at the
+adapter boundary:
+
+| Native kind | Missing `retryable` | Missing `code` |
+|---|---|---|
+| `Unavailable`, `Timeout` | `true` | The native kind string |
+| `Invalid`, `NotFound`, all other kinds | `false` | The native kind string |
+
+Storage acquisition/read failures retain that classification, but their public
+message is always `page source could not be read`. The runtime logger receives
+the original diagnostic at the storage failure boundary. Input-validation
+strings alone map to permanent `INVALID/invalid_input`.
 
 ## Limits and safety
 

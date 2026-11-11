@@ -1,4 +1,6 @@
 local fs = require("fs")
+local logger = require("logger")
+local log = logger:named("pdf2image.rasterize")
 local pdf2image = require("pdf2image")
 local types = require("types")
 
@@ -13,13 +15,25 @@ local types = require("types")
 -- }
 -- returns { ok = { total, pages = { { page, bytes, format } } } } or { err = { message, kind, retryable, code } }
 
+local RETRYABLE_KINDS: {[string]: boolean} = {[errors.UNAVAILABLE] = true, [errors.TIMEOUT] = true}
+
 local function fail(cause: error | string): types.RasterizeResult
     if type(cause) == "userdata" then
         local err = cause :: error
-        return {err = {message = err:message(), kind = err:kind(), retryable = err:retryable(),
-            code = (err:details() or {}).code}}
+        local kind = err:kind()
+        local retryable = err:retryable()
+        if retryable == nil then retryable = RETRYABLE_KINDS[kind] == true end
+        local code = (err:details() or {}).code
+        if type(code) ~= "string" then code = kind end
+        return {err = {message = err:message(), kind = kind, retryable = retryable, code = code}}
     end
     return {err = {message = cause :: string, kind = errors.INVALID, retryable = false, code = "invalid_input"}}
+end
+
+local function storage_failure(cause: error): error
+    log:warn("page source could not be read", {error = tostring(cause)})
+    return errors.new({message = "page source could not be read", kind = cause:kind(),
+        retryable = cause:retryable(), details = cause:details()})
 end
 
 local function open_doc(ref: types.RasterizeRef): (types.PdfDocument?, error | string?)
@@ -39,13 +53,13 @@ local function open_doc(ref: types.RasterizeRef): (types.PdfDocument?, error | s
             return nil, "rasterize: ref needs storage_id/storage_path, url, or bytes"
         end
         local storage, storage_err = fs.get(storage_id :: string)
-        if storage_err ~= nil then return nil, storage_err end
+        if storage_err ~= nil then return nil, storage_failure(storage_err) end
         if not storage then
             return nil, errors.new({message = "rasterize: storage unavailable", kind = errors.INTERNAL,
                 retryable = false, details = {code = "storage_unavailable"}})
         end
         local content, read_err = storage:readfile(storage_path :: string)
-        if read_err ~= nil then return nil, read_err end
+        if read_err ~= nil then return nil, storage_failure(read_err) end
         if type(content) ~= "string" or content == "" then return nil, "rasterize: failed to read source bytes" end
         bytes = content
     end
