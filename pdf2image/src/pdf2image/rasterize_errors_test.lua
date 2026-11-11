@@ -20,13 +20,26 @@ return {run = test.run_cases(function()
                 end)
             end
         end
+        for _, stage in ipairs({"open", "render"}) do
+            for _, spec in ipairs({{errors.UNAVAILABLE, true}, {errors.TIMEOUT, true},
+                {errors.INVALID, false}, {errors.NOT_FOUND, false}}) do
+                test.it("completes missing native metadata for " .. spec[1] .. " during " .. stage, function()
+                    fixture.stage = stage
+                    fixture.err = errors.new({message = "native failure", kind = spec[1]})
+                    test.is_nil(fixture.err:retryable())
+                    local result = adapter.run({ref = {bytes = "input"}, pages = {1}})
+                    test.eq(result.err.kind, spec[1]); test.eq(result.err.retryable, spec[2])
+                    test.eq(result.err.code, spec[1])
+                end)
+            end
+        end
         for _, stage in ipairs({"acquire", "read"}) do
             test.it("preserves a transient storage failure during " .. stage, function()
                 storage.stage = stage
-                storage.err = errors.new({message = "storage temporarily unavailable", kind = errors.UNAVAILABLE,
+                storage.err = errors.new({message = "cannot read /private/source/document.pdf", kind = errors.UNAVAILABLE,
                     retryable = true, details = {code = "storage_unavailable"}})
                 local result = adapter.run({ref = {storage_id = "app:source", storage_path = "document.pdf"}, pages = {1}})
-                test.eq(result.err.message, storage.err:message())
+                test.eq(result.err.message, "page source could not be read")
                 test.eq(result.err.kind, storage.err:kind())
                 test.eq(result.err.retryable, storage.err:retryable())
                 test.eq(result.err.code, storage.err:details().code)
