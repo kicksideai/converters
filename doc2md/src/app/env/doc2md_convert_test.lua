@@ -32,6 +32,27 @@ end
 
 local function define()
     test.describe("doc2md.convert", function()
+        test.it("drops NUL glyphs consistently across PDF decoders and text runs", function()
+            local font = "/Subtype /Type1 /BaseFont /Helvetica"
+            local cmap = "1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0000> <42> <0042> endbfchar"
+            local cases = {
+                {font, "(A) Tj", cmap, ""},
+                {font, "(BAB) Tj", cmap, "BB"},
+                {font, "(B) Tj (A) Tj (B) Tj", cmap, "BB"},
+                {font, "(C) Tj", cmap, "C"},
+                {font, "<0100> Tj", "1 begincodespacerange <0000> <FFFF> endcodespacerange 2 beginbfchar <0001> <0041> <0100> <0000> endbfchar", ""},
+                {font .. " /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /uni0000] >>", "(A) Tj", nil, ""},
+                {font .. " /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /u0000] >>", "(BAB) Tj", nil, "BB"},
+                {font, "<48656C6C6F0020776F726C64> Tj", nil, "Helloworld"},
+            }
+            for _, case in ipairs(cases) do
+                local document, err = doc2md.convert({bytes = pdf_pages.text_page(case[1], case[2], case[3])})
+                test.is_nil(err)
+                test.is_nil((document.markdown:find(string.char(0), 1, true)))
+                test.eq((document.markdown:gsub("%s", "")), case[4])
+            end
+        end)
+
         test.it("leaves the effective conversion budget to the caller", function()
             local converter = assert(registry.get("kickside.convert.doc2md:converter"))
             local data = converter.data or converter
