@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.20](https://github.com/kicksideai/converters/compare/doc2md-v0.8.19...doc2md-v0.8.20) (2026-11-11)
+
+
+### Bug Fixes
+
+* **doc2md:** omit NUL from PDF text ([#21](https://github.com/kicksideai/converters/issues/21)) ([94c3b84](https://github.com/kicksideai/converters/commit/94c3b84746ff0c8a950d353955505ded7af8b16c))
+
 ## [0.8.19](https://github.com/kicksideai/converters/compare/doc2md-v0.8.18...doc2md-v0.8.19) (2026-11-10)
 
 
