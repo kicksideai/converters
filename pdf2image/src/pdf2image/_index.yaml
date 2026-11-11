@@ -77,6 +77,7 @@ entries:
     modules: [fs]
     imports:
       pdf2image: kickside.convert.pdf2image:pdf2image
+      types: kickside.convert.pdf2image:types
 
   - name: capability
     kind: registry.entry
@@ -114,6 +115,7 @@ entries:
     imports:
       test: wippy.test:test
       pdf2image: kickside.convert.pdf2image:pdf2image
+      types: kickside.convert.pdf2image:types
       fixtures: kickside.convert.pdf2image:fixtures
 
   - name: fixtures
@@ -133,3 +135,33 @@ entries:
     imports:
       test: wippy.test:test
       converter: kickside.convert.pdf2image:pdf2image
+
+  - name: rasterize_error_fixture
+    kind: library.lua
+    meta: {type: test_helper}
+    source: file://rasterize_error_fixture.lua
+    imports:
+      types: kickside.convert.pdf2image:types
+  - name: rasterize_error_adapter
+    kind: library.lua
+    meta: {type: test_helper}
+    source: file://rasterize_adapter.lua
+    modules: [fs]
+    imports:
+      pdf2image: kickside.convert.pdf2image:rasterize_error_fixture
+      types: kickside.convert.pdf2image:types
+  - name: rasterize_errors_test
+    kind: function.lua
+    meta: {type: test, suite: pdf2image.rasterize_errors}
+    source: file://rasterize_errors_test.lua
+    method: run
+    modules: [funcs]
+    imports:
+      test: wippy.test:test
+      adapter: kickside.convert.pdf2image:rasterize_error_adapter
+      fixture: kickside.convert.pdf2image:rasterize_error_fixture
+      samples: kickside.convert.pdf2image:fixtures
+
+  - name: types
+    kind: library.lua
+    source: file://types.lua
