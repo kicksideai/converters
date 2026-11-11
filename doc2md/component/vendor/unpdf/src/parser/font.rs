@@ -87,14 +87,14 @@ fn next_angle_token(s: &str) -> Option<(&str, &str)> {
 }
 
 /// Filter out Unicode noncharacters and control sentinels that ToUnicode CMaps
-/// commonly use to indicate "no mapping" (U+FFFF, U+FFFE, U+FFFD).
+/// commonly use to indicate "no mapping" (U+0000, U+FFFF, U+FFFE, U+FFFD).
 /// Also drops other noncharacters (U+FDD0..U+FDEF, U+xFFFE, U+xFFFF).
 fn sanitize_unicode(s: String) -> Option<String> {
     let filtered: String = s
         .chars()
         .filter(|&c| {
             let cp = c as u32;
-            if cp == 0xFFFD || cp == 0xFFFE || cp == 0xFFFF {
+            if cp == 0x0000 || cp == 0xFFFD || cp == 0xFFFE || cp == 0xFFFF {
                 return false;
             }
             if (0xFDD0..=0xFDEF).contains(&cp) {
@@ -669,6 +669,25 @@ endbfrange";
         assert_eq!(map.mappings.get(&0x20), Some(&" ".to_string()));
         assert_eq!(map.mappings.get(&0x41), Some(&"A".to_string()));
         assert_eq!(map.mappings.get(&0x7E), Some(&"~".to_string()));
+    }
+
+    #[test]
+    fn test_parse_to_unicode_cmap_drops_nul_mapping() {
+        // A glyph mapped to <0000> has no Unicode text, like the U+FFFD/U+FFFF sentinels.
+        let cmap = b"1 begincodespacerange
+<00> <FF>
+endcodespacerange
+2 beginbfchar
+<01> <0000>
+<02> <00000041>
+endbfchar
+1 beginbfrange
+<20> <7E> <0020>
+endbfrange";
+        let map = parse_to_unicode_cmap(cmap).unwrap();
+        assert_eq!(map.mappings.get(&0x01), None);
+        assert_eq!(map.mappings.get(&0x02), Some(&"A".to_string()));
+        assert_eq!(map.decode(b"of\x01ce"), "ofce");
     }
 
     #[test]

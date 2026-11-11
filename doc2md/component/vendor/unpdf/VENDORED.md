@@ -98,4 +98,15 @@ decoded samples. Streamed and buffered parsing retain raw image resources and
 their block positions, allowing consumers to omit undecodable files without
 moving subsequent links. Stencil masks use black paint on white.
 
+### 5. U+0000 No-Mapping Sentinel (`src/parser/font.rs`)
+
+Upstream `sanitize_unicode` drops the U+FFFD, U+FFFE, U+FFFF, noncharacter, and
+Private Use "no mapping" sentinels of ToUnicode and embedded TrueType cmaps, but keeps
+U+0000. Producers map glyphs they cannot express, such as ligatures, to `<0000>`, so the
+extracted text carried NUL bytes and doc2md refused that Markdown as binary when it came
+back as input. U+0000 is treated as unmapped like the other sentinels.
+`test_parse_to_unicode_cmap_drops_nul_mapping` and the integration test
+`convert_pdf_drops_nul_from_tounicode_mapped_glyphs` in `doc2md/component/src/lib.rs`
+cover it.
+
 No other unpdf sources are modified.
