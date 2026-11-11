@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.15](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.14...pdf2image-v0.7.15) (2026-11-11)
+
+
+### Bug Fixes
+
+* **pdf2image:** preserve rasterizer error classification ([#23](https://github.com/kicksideai/converters/issues/23)) ([7ebc634](https://github.com/kicksideai/converters/commit/7ebc63498d34dbec572c992a3b6ef3d87a01cea6))
+
 ## [0.7.14](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.13...pdf2image-v0.7.14) (2026-11-04)
 
 
