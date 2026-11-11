@@ -72,4 +72,17 @@ local function image_pages(images: { ImageSpec }): string
     return assemble(objects)
 end
 
-return { pdf = pdf, image_pages = image_pages }
+local function text_page(font: string, commands: string, cmap: string?): string
+    local contents = "BT /F1 12 Tf 40 740 Td " .. commands .. " ET"
+    local objects = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font " .. font .. (cmap and " /ToUnicode 6 0 R" or "") .. " >>",
+        "<< /Length " .. #contents .. " >>\nstream\n" .. contents .. "\nendstream",
+    }
+    if cmap then objects[6] = "<< /Length " .. #cmap .. " >>\nstream\n" .. cmap .. "\nendstream" end
+    return assemble(objects)
+end
+
+return { pdf = pdf, image_pages = image_pages, text_page = text_page }

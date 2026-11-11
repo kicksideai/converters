@@ -86,8 +86,8 @@ fn next_angle_token(s: &str) -> Option<(&str, &str)> {
     Some((s[start..end].trim(), &s[end + 1..]))
 }
 
-/// Filter out Unicode noncharacters and control sentinels that ToUnicode CMaps
-/// commonly use to indicate "no mapping" (U+FFFF, U+FFFE, U+FFFD).
+/// Filter out Unicode noncharacters that ToUnicode CMaps commonly use to
+/// indicate "no mapping" (U+FFFF, U+FFFE, U+FFFD).
 /// Also drops other noncharacters (U+FDD0..U+FDEF, U+xFFFE, U+xFFFF).
 fn sanitize_unicode(s: String) -> Option<String> {
     let filtered: String = s

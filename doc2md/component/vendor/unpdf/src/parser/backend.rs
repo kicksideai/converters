@@ -252,8 +252,12 @@ impl PdfBackend for RawBackend {
     }
 
     fn decode_text(&self, page: PageId, font_name: &[u8], bytes: &[u8]) -> String {
-        self.font_resolver
-            .decode_text(&self.doc, page, font_name, bytes)
+        let mut text = self
+            .font_resolver
+            .decode_text(&self.doc, page, font_name, bytes);
+        // Keep mapped sentinels through decoder selection so empty runs do not fall back.
+        text.retain(|c| c != '\0');
+        text
     }
 
     fn metadata(&self) -> PdfMetadataRaw {
@@ -1613,6 +1617,159 @@ fn extract_dimensions_from_array(obj: &RawPdfObject) -> Option<(f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text_backend(font: &str, extra_objects: &[String]) -> RawBackend {
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> >>".to_string(),
+            font.to_string(),
+        ];
+        objects.extend_from_slice(extra_objects);
+        let mut pdf = "%PDF-1.4\n".to_string();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, object));
+        }
+        let xref = pdf.len();
+        pdf.push_str(&format!(
+            "xref\n0 {}\n0000000000 65535 f \n",
+            objects.len() + 1
+        ));
+        for offset in offsets {
+            pdf.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        pdf.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        ));
+        RawBackend::load_bytes(pdf.as_bytes()).unwrap()
+    }
+
+    fn tounicode_backend(cmap: &str) -> RawBackend {
+        text_backend(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 5 0 R >>",
+            &[format!(
+                "<< /Length {} >>\nstream\n{cmap}\nendstream",
+                cmap.len()
+            )],
+        )
+    }
+
+    #[test]
+    fn test_parse_to_unicode_cmap_drops_nul_mapping() {
+        let cmap = "1 begincodespacerange
+<00> <FF>
+endcodespacerange
+2 beginbfchar
+<01> <0000>
+<02> <00000041>
+endbfchar
+1 beginbfrange
+<20> <7E> <0020>
+endbfrange";
+        let backend = tounicode_backend(cmap);
+        assert_eq!(backend.decode_text((3, 0), b"F1", b"\x01"), "");
+        assert_eq!(backend.decode_text((3, 0), b"F1", b"\x02"), "A");
+        assert_eq!(backend.decode_text((3, 0), b"F1", b"of\x01ce"), "ofce");
+    }
+
+    #[test]
+    fn test_decode_text_nul_tounicode_run_boundaries() {
+        for mappings in [
+            "2 beginbfchar <41> <0000> <42> <0042> endbfchar",
+            "1 beginbfrange <41> <42> [<0000> <0042>] endbfrange",
+            "1 beginbfrange <41> <41> <0000> endbfrange 1 beginbfchar <42> <0042> endbfchar",
+        ] {
+            let backend = tounicode_backend(&format!(
+                "1 begincodespacerange <00> <FF> endcodespacerange {mappings}"
+            ));
+            for (bytes, expected) in [(b"A".as_slice(), ""), (b"AB", "B"), (b"BA", "B")] {
+                assert_eq!(backend.decode_text((3, 0), b"F1", bytes), expected);
+            }
+            // An absent mapping still uses the existing encoding fallback.
+            assert_eq!(backend.decode_text((3, 0), b"F1", b"C"), "C");
+        }
+        let backend = tounicode_backend(
+            "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0000> endbfchar",
+        );
+        assert_eq!(backend.decode_text((3, 0), b"F1", b"A"), "");
+    }
+
+    #[test]
+    fn test_decode_text_nul_keeps_two_byte_width() {
+        let backend = tounicode_backend("1 begincodespacerange <0000> <FFFF> endcodespacerange 2 beginbfchar <0001> <0041> <0100> <0000> endbfchar");
+        assert_eq!(backend.decode_text((3, 0), b"F1", &[1, 0]), "");
+        assert_eq!(backend.decode_text((3, 0), b"F1", &[0, 1, 1, 0]), "A");
+    }
+
+    #[test]
+    fn test_decode_text_nul_embedded_cmap() {
+        // Minimal TrueType table with format 12 groups: U+0000 -> GID 1, A -> GID 2.
+        let mut font = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        font.extend_from_slice(b"cmap");
+        for value in [0u32, 28, 52] {
+            font.extend_from_slice(&value.to_be_bytes());
+        }
+        font.extend_from_slice(&[0, 0, 0, 1, 0, 3, 0, 1]);
+        font.extend_from_slice(&12u32.to_be_bytes());
+        font.extend_from_slice(&[0, 12, 0, 0]);
+        for value in [40u32, 0, 2, 0, 0, 1, 65, 65, 2] {
+            font.extend_from_slice(&value.to_be_bytes());
+        }
+        let hex: String = font.iter().map(|b| format!("{b:02X}")).collect();
+        let backend = text_backend(
+            "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [5 0 R] >>",
+            &[
+                "<< /Type /Font /Subtype /CIDFontType2 /FontDescriptor 6 0 R /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 0 >> >>".into(),
+                "<< /Type /FontDescriptor /FontFile2 7 0 R >>".into(),
+                format!("<< /Length {} /Filter /ASCIIHexDecode >>\nstream\n{hex}>\nendstream", hex.len() + 1),
+            ],
+        );
+        assert_eq!(backend.decode_text((3, 0), b"F1", &[0, 1]), "");
+        assert_eq!(
+            backend.decode_text((3, 0), b"F1", &[0, 2, 0, 1, 0, 2]),
+            "AA"
+        );
+    }
+
+    #[test]
+    fn test_decode_text_nul_preserves_adjacent_scalars() {
+        let backend = tounicode_backend("1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <41> <00000041> <42> <000000660069> <43> <0000D83DDE00> endbfchar");
+        assert_eq!(backend.decode_text((3, 0), b"F1", b"ABC"), "Afi😀");
+    }
+
+    #[test]
+    fn test_decode_text_nul_differences() {
+        for glyph in ["uni0000", "u0000"] {
+            let backend = text_backend(&format!("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /{glyph}] >> >>"), &[]);
+            assert_eq!(backend.decode_text((3, 0), b"F1", b"A"), "");
+            assert_eq!(backend.decode_text((3, 0), b"F1", b"BAB"), "BB");
+        }
+    }
+
+    #[test]
+    fn test_decode_text_nul_direct_strings() {
+        let backend = text_backend(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            &[],
+        );
+        for (bytes, expected) in [
+            (b"Hello\0 world\n\t".as_slice(), "Hello world\n\t"),
+            (b"Hell\xE9\0 world", "Hellé world"),
+        ] {
+            assert_eq!(backend.decode_text((3, 0), b"MissingFont", bytes), expected);
+        }
+        let utf16: Vec<u8> = std::iter::once(0xFEFFu16)
+            .chain("Hello\0 world".encode_utf16())
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        assert_eq!(
+            backend.decode_text((3, 0), b"MissingFont", &utf16),
+            "Hello world"
+        );
+    }
 
     #[test]
     fn test_get_number_from_value() {

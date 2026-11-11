@@ -98,4 +98,27 @@ decoded samples. Streamed and buffered parsing retain raw image resources and
 their block positions, allowing consumers to omit undecodable files without
 moving subsequent links. Stencil masks use black paint on white.
 
+### 5. U+0000 No-Text Glyphs (`src/parser/backend.rs`, `src/parser/font.rs`)
+
+PDF glyph decoding omits U+0000 at `RawBackend::decode_text`, after choosing the
+text decoder. This single exit covers ToUnicode, embedded TrueType cmap, CID
+resources, encoding Differences and glyph names, and direct string decoding.
+Other Unicode scalars and whitespace remain unchanged.
+
+ToUnicode and embedded cmap entries retain U+0000 internally until that exit.
+The entry therefore remains distinct from an absent mapping: an all-sentinel run
+does not activate a fallback that invents text. Retaining the original mapping
+keys also keeps the existing code-width inference independent of NUL removal;
+a two-byte key mapped to U+0000 cannot turn into two single-byte codes.
+Fallback selection for absent mappings and filtering of other sentinels remain
+unchanged.
+
+Backend regressions cover isolated and mixed runs, bfchar and both bfrange forms,
+two-byte code width, embedded cmap with CID fallback, encoding Differences, direct
+UTF-8/UTF-16BE/Latin-1 strings, and adjacent multi-scalar and surrogate mappings.
+`test_parse_to_unicode_cmap_drops_nul_mapping` checks the original mapping case
+at the glyph decoding exit. The component regression
+`convert_pdf_drops_nul_from_tounicode_mapped_glyphs` and the Lua convert suite
+exercise the resulting Markdown.
+
 No other unpdf sources are modified.

@@ -821,6 +821,25 @@ mod tests {
     }
 
     #[test]
+    fn convert_pdf_drops_nul_from_tounicode_mapped_glyphs() {
+        // Public generated fixture: a font whose ToUnicode CMap maps glyph <01> to <0000>,
+        // the way some producers map ligature glyphs they cannot express.
+        let doc = convert_pdf(
+            include_bytes!("../tests/assets/synthetic_tounicode_nul.pdf"),
+            settings(false),
+        )
+        .unwrap();
+        assert!(
+            !doc.markdown.contains('\0'),
+            "PDF text must not carry U+0000: {:?}",
+            doc.markdown
+        );
+        assert!(doc.markdown.contains("Synthetic ofce notice"));
+        assert!(doc.markdown.contains("Second line stays intact."));
+        assert!(markdown::is_text(doc.markdown.as_bytes()));
+    }
+
+    #[test]
     fn font_statistics_count_tie_selects_smaller_body() {
         // Equal-frequency HashMap keys used to pick body_size from iteration
         // order. Smaller font must win so the larger size can still be a heading.
