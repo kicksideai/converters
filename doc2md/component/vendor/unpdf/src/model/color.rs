@@ -43,6 +43,8 @@ pub enum ColorSpace {
     /// DeviceN colorants rendered through the tint transform into the alternate space.
     DeviceN {
         components: usize,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        names: Vec<String>,
         alternate: Box<ColorSpace>,
         tint_transform: Function,
     },
@@ -100,6 +102,11 @@ impl ColorSpace {
     pub fn paints(&self) -> bool {
         match self {
             Self::Separation { name, .. } if name == "None" => false,
+            Self::DeviceN { names, .. }
+                if !names.is_empty() && names.iter().all(|name| name == "None") =>
+            {
+                false
+            }
             Self::Icc { alternate, .. }
             | Self::DeviceN { alternate, .. }
             | Self::Separation {

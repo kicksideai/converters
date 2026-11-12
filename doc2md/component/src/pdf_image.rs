@@ -458,6 +458,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn devicen_none_emits_no_image_and_stays_counted() {
+        for filter in ["", "/Filter /DCTDecode", "/Filter [/JPXDecode]"] {
+            let pdf = pdf_with_image(
+                &format!("/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/DeviceN [/None /None] /DeviceGray 6 0 R] {filter}"),
+                &[128, 128], "", &[Object {
+                    dict: "/FunctionType 4 /Domain [0 1 0 1] /Range [0 1]",
+                    stream: Some(b"{ pop }"),
+                }]);
+            assert_no_image_and_counted(&pdf);
+        }
+    }
+
+    #[test]
+    fn devicen_with_a_real_colorant_still_emits_pixels() {
+        for names in ["/None /Spot", "/Spot /None", "/Cyan /Magenta"] {
+            let pdf = pdf_with_image(
+                &format!("/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/DeviceN [{names}] /DeviceGray 6 0 R]"),
+                &[128, 128], "", &[Object {
+                    dict: "/FunctionType 4 /Domain [0 1 0 1] /Range [0 1]",
+                    stream: Some(b"{ pop }"),
+                }]);
+            assert_eq!(
+                extracted_png(&pdf),
+                (png::ColorType::Grayscale, vec![128]),
+                "{names}"
+            );
+        }
+    }
+
     fn assert_no_image_and_counted(pdf: &[u8]) {
         let converted = convert_pdf(
             pdf,
@@ -821,6 +851,7 @@ mod tests {
             std::iter::once(ColorSpace::Cmyk).chain(functions.into_iter().map(|tint_transform| {
                 ColorSpace::DeviceN {
                     components: 2,
+                    names: Vec::new(),
                     alternate: Box::new(ColorSpace::Cmyk),
                     tint_transform,
                 }
