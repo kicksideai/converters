@@ -93,8 +93,12 @@ fn parse_hex_pair(bytes: &[u8], index: usize) -> Result<u8, RenderError> {
         .ok_or_else(|| fail(ERR_OPTIONS, "background color is too short"))?;
     let text = core::str::from_utf8(pair)
         .map_err(|_| fail(ERR_OPTIONS, "background color contains invalid characters"))?;
-    u8::from_str_radix(text, 16)
-        .map_err(|_| fail(ERR_OPTIONS, format!("invalid hex in background color '{text}'")))
+    u8::from_str_radix(text, 16).map_err(|_| {
+        fail(
+            ERR_OPTIONS,
+            format!("invalid hex in background color '{text}'"),
+        )
+    })
 }
 
 fn parse_background(value: &str) -> Result<AlphaColor<Srgb>, RenderError> {
@@ -302,6 +306,42 @@ bindings::export!(Component with_types_in bindings);
 mod tests {
     use super::*;
 
+    fn colorant_page(page: usize) -> Vec<u8> {
+        let pdf = load(include_bytes!("../tests/assets/colorant-images.pdf").to_vec()).unwrap();
+        render(
+            &pdf.pages()[page],
+            &RenderCache::new(),
+            &font_settings(),
+            &RenderSettings::default(),
+        )
+        .into_png()
+        .unwrap()
+    }
+
+    #[test]
+    fn separation_none_image_preserves_scanned_pixels() {
+        let scan = colorant_page(0);
+        assert_ne!(scan, colorant_page(5), "scan differs from opaque gray");
+        assert_eq!(colorant_page(1), scan);
+    }
+
+    #[test]
+    fn devicen_all_none_image_preserves_scanned_pixels() {
+        assert_eq!(colorant_page(3), colorant_page(0));
+    }
+
+    #[test]
+    fn separation_real_colorant_image_paints() {
+        assert_eq!(colorant_page(2), colorant_page(5));
+        assert_ne!(colorant_page(2), colorant_page(0));
+    }
+
+    #[test]
+    fn devicen_mixed_colorants_image_paints() {
+        assert_eq!(colorant_page(4), colorant_page(5));
+        assert_ne!(colorant_page(4), colorant_page(0));
+    }
+
     fn scaling(scale: f32, dpi: f32) -> ScalingOptions {
         ScalingOptions { dpi, scale }
     }
@@ -366,7 +406,10 @@ mod tests {
     #[test]
     fn resolve_scale_prefers_scale_then_dpi_then_default() {
         assert_eq!(resolve_scale(&scaling(2.0, 300.0)), 2.0);
-        assert_eq!(resolve_scale(&scaling(0.0, 144.0)), 144.0 / PDF_POINTS_PER_INCH);
+        assert_eq!(
+            resolve_scale(&scaling(0.0, 144.0)),
+            144.0 / PDF_POINTS_PER_INCH
+        );
         assert_eq!(
             resolve_scale(&scaling(0.0, 0.0)),
             DEFAULT_DPI / PDF_POINTS_PER_INCH
@@ -427,7 +470,9 @@ mod tests {
             bg_color: bg,
         };
         let jpeg = encode(render(page, &cache, &fonts, &rs), &settings).expect("encode");
-        let img = image::load_from_memory(&jpeg).expect("decode jpeg").to_rgb8();
+        let img = image::load_from_memory(&jpeg)
+            .expect("decode jpeg")
+            .to_rgb8();
         let p = img.get_pixel(0, 0);
         assert!(
             p[0] > 200 && p[1] > 200 && p[2] > 200,

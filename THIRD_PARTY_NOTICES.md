@@ -9,9 +9,13 @@ here relicenses it.
 | Name | License | Path |
 | --- | --- | --- |
 | unpdf 0.7.0 | MIT | `doc2md/component/vendor/unpdf` |
+| hayro-interpret 0.7.0 | Apache-2.0 OR MIT | `pdf2image/component/vendor/hayro-interpret` |
+| Foxit fonts | BSD-3-Clause | `pdf2image/component/vendor/hayro-interpret/assets/LICENSE_FOXIT` |
+| CGATS ICC profile | CC0-1.0 | `pdf2image/component/vendor/hayro-interpret/assets/CGATS_LICENSE.txt` |
 | DejaVu fonts | Bitstream Vera License (public-domain DejaVu changes) | `html2pdf/component/assets/fonts` |
 
-`doc2md/component/vendor/unpdf/VENDORED.md` documents
+`doc2md/component/vendor/unpdf/VENDORED.md` and
+`pdf2image/component/vendor/hayro-interpret/VENDORED.md` document
 the provenance and the patches applied to each vendored tree.
 
 ## Fetched at build time (not stored in the repository)
@@ -43,7 +47,7 @@ Package-provided license and attribution texts below retain their original wordi
 
 License: 0BSD OR MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-0BSD: [License text](#license-text-861399f8c21c042b110517e76dc6b63a2b334276c8cf17412fc3c8908ca8dc17)
 
@@ -75,9 +79,15 @@ LICENSE-MIT: [License text](#license-text-0f96a83840e146e43c0ec96a22ec1f392e0680
 
 License: BSD-3-Clause
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae)
+
+### cargo: alloc-stdlib@0.2.2
+
+License: BSD-3-Clause
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 ### cargo: alloc-stdlib@0.2.4
 
@@ -135,7 +145,7 @@ LICENSE-MIT: [License text](#license-text-15656cc11a8331f28c0986b8ab97220d3e76f9
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -145,7 +155,7 @@ LICENSE-MIT: [License text](#license-text-4da95ec4ecb65b738d470b7d762894ad9c97da
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `doc2md/component/vendor/unpdf/Cargo.lock`
+Lockfiles: `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -175,7 +185,7 @@ LICENSE-MIT: [License text](#license-text-0dd882e53de11566d50f8e8e2d5a651bcf3fab
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/vendor/unpdf/Cargo.lock`
+Lockfiles: `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -231,6 +241,14 @@ LICENSE-APACHE: [License text](#license-text-a9040321c3712d8fd0b09cf52b17445de04
 
 LICENSE-MIT: [License text](#license-text-d5c22aa3118d240e877ad41c5d9fa232f9c77d757d4aac0c2f943afc0a95e0ef)
 
+### cargo: brotli@8.0.2
+
+License: BSD-3-Clause AND MIT
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE.MIT: [License text](#license-text-3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94)
+
 ### cargo: brotli@8.0.4
 
 License: BSD-3-Clause AND MIT
@@ -240,6 +258,14 @@ Lockfiles: `pdf2image/component/Cargo.lock`
 LICENSE.BSD-3-Clause: [License text](#license-text-c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae)
 
 LICENSE.MIT: [License text](#license-text-3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94)
+
+### cargo: brotli-decompressor@5.0.0
+
+License: BSD-3-Clause/MIT
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE: [License text](#license-text-c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae)
 
 ### cargo: brotli-decompressor@5.0.3
 
@@ -273,7 +299,7 @@ LICENSE-MIT: [License text](#license-text-65f94e99ddaf4f5d1782a6dae23f35d4293a9a
 
 License: Zlib OR Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb)
 
@@ -285,7 +311,7 @@ LICENSE-ZLIB: [License text](#license-text-84b34dd7608f7fb9b17bd588a6bf392bf7de5
 
 License: Zlib OR Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb)
 
@@ -307,7 +333,7 @@ LICENSE-MIT: [License text](#license-text-0f96a83840e146e43c0ec96a22ec1f392e0680
 
 License: Unlicense OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-MIT: [License text](#license-text-0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f)
 
@@ -371,7 +397,7 @@ LICENSE: [License text](#license-text-ebaac853b53fec0ed475796f533ce676912a4df9ad
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -523,7 +549,7 @@ LICENSE-MIT: [License text](#license-text-ae9baa7beea910273c2f384c2a6b721fb7bd02
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08)
 
@@ -735,7 +761,7 @@ LICENSE-MIT: [License text](#license-text-8764a597675778ddfd4e25f81b08a05dbcf089
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 COPYRIGHT: [License text](#license-text-ec82b96487e9e778ee610c7ab245162464782cfa1f555c2299333f8dbe5c036a)
 
@@ -757,7 +783,7 @@ LICENSE-MIT: [License text](#license-text-23f18e03dc49df91622fe2a76176497404e46c
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -767,11 +793,21 @@ LICENSE-MIT: [License text](#license-text-23f18e03dc49df91622fe2a76176497404e46c
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594)
 
 LICENSE-MIT: [License text](#license-text-c77a4cf9da729987d0fe7ccd811e3bd27393914ddf3d23467c18cc22954513b3)
+
+### cargo: fearless_simd@0.4.0
+
+License: Apache-2.0 OR MIT
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE-APACHE: [License text](#license-text-a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9)
+
+LICENSE-MIT: [License text](#license-text-23c23145f6eac25c28cdcc03d38506a5712a9a8cffb5bd5301457f6173ea696e)
 
 ### cargo: fearless_simd@0.4.1
 
@@ -797,7 +833,7 @@ LICENSE-MIT: [License text](#license-text-378f5840b258e2779c39418f3f2d7b2ba96f1c
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -833,7 +869,7 @@ LICENSE: [License text](#license-text-b1181a40b2a7b25cf66fd01481713bc1005df082c5
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a14f7d685a79c0f4fb64aee305527a6d5fa55f2401f4e6d688d7b1301868e6c0)
 
@@ -961,7 +997,7 @@ LICENSE-MIT: [License text](#license-text-51b50e6120c344dcc146bbd6375ca1c78e079d
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9)
 
@@ -971,7 +1007,7 @@ LICENSE-MIT: [License text](#license-text-51b50e6120c344dcc146bbd6375ca1c78e079d
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9)
 
@@ -991,7 +1027,7 @@ LICENSE-MIT: [License text](#license-text-51b50e6120c344dcc146bbd6375ca1c78e079d
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9)
 
@@ -1001,7 +1037,7 @@ LICENSE-MIT: [License text](#license-text-51b50e6120c344dcc146bbd6375ca1c78e079d
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9)
 
@@ -1011,7 +1047,17 @@ LICENSE-MIT: [License text](#license-text-51b50e6120c344dcc146bbd6375ca1c78e079d
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE-APACHE: [License text](#license-text-0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9)
+
+LICENSE-MIT: [License text](#license-text-51b50e6120c344dcc146bbd6375ca1c78e079d97c8bea76e67a53d6ff0efebac)
+
+### cargo: hayro-syntax@0.7.0
+
+License: Apache-2.0 OR MIT
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9)
 
@@ -1101,7 +1147,7 @@ LICENSE-MIT: [License text](#license-text-378f5840b258e2779c39418f3f2d7b2ba96f1c
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594)
 
@@ -1221,7 +1267,7 @@ LICENSE-MIT: [License text](#license-text-378f5840b258e2779c39418f3f2d7b2ba96f1c
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30)
 
@@ -1325,7 +1371,7 @@ LICENSE-MIT: [License text](#license-text-b4eb00df6e2a4d22518fcaa6a2b4646f249b3a
 
 License: Unlicense OR MIT
 
-Lockfiles: `doc2md/component/vendor/unpdf/Cargo.lock`
+Lockfiles: `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 COPYING: [License text](#license-text-01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f)
 
@@ -1345,7 +1391,7 @@ LICENSE-MIT: [License text](#license-text-0f96a83840e146e43c0ec96a22ec1f392e0680
 
 License: MIT OR Zlib OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-4108245a1f2df9d4e94df8abed5b4ba0759bb2f9b40a6b939f1be141077ae50b)
 
@@ -1359,7 +1405,7 @@ LICENSE-ZLIB.md: [License text](#license-text-0a54e647fe54104658b5e563c04c6f9edf
 
 License: BSD-3-Clause OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE.md: [License text](#license-text-90bf2d659c43045111b65c733ab2a6d4cbcb422a098368c8c58a9ba3db4ed0c5)
 
@@ -1369,7 +1415,7 @@ LICENSE.md: [License text](#license-text-2aa92cada6431e75615e3fe6cb1a9082c98f777
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -1423,7 +1469,7 @@ LICENSE-MIT: [License text](#license-text-23c23145f6eac25c28cdcc03d38506a5712a9a
 
 License: MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38)
 
@@ -1431,7 +1477,7 @@ LICENSE: [License text](#license-text-0ab4d106b6faac07fb6a051815fd1b4d862d730895
 
 License: MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38)
 
@@ -1439,7 +1485,7 @@ LICENSE: [License text](#license-text-0ab4d106b6faac07fb6a051815fd1b4d862d730895
 
 License: MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38)
 
@@ -1447,7 +1493,7 @@ LICENSE: [License text](#license-text-0ab4d106b6faac07fb6a051815fd1b4d862d730895
 
 License: MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38)
 
@@ -1499,7 +1545,7 @@ LICENSE: [License text](#license-text-1e881ecf2862d01e6e5bc2b861e46886d2a6fb0149
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -1509,7 +1555,7 @@ LICENSE-MIT: [License text](#license-text-eaf40297c75da471f7cda1f3458e8d91b4b2ec
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30)
 
@@ -1529,11 +1575,21 @@ LICENSE-MIT: [License text](#license-text-23f18e03dc49df91622fe2a76176497404e46c
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a)
 
 LICENSE-MIT: [License text](#license-text-23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3)
+
+### cargo: pxfm@0.1.28
+
+License: BSD-3-Clause OR Apache-2.0
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE-APACHE.md: [License text](#license-text-90bf2d659c43045111b65c733ab2a6d4cbcb422a098368c8c58a9ba3db4ed0c5)
+
+LICENSE.md: [License text](#license-text-2aa92cada6431e75615e3fe6cb1a9082c98f777d48ae1c087c0da0e37f7b8bff)
 
 ### cargo: pxfm@0.1.29
 
@@ -1585,7 +1641,7 @@ LICENSE-MIT: [License text](#license-text-23f18e03dc49df91622fe2a76176497404e46c
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a)
 
@@ -1641,7 +1697,7 @@ LICENSE-MIT: [License text](#license-text-70c9d40f1f9545c3f133b8a67206e89da850f6
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a14f7d685a79c0f4fb64aee305527a6d5fa55f2401f4e6d688d7b1301868e6c0)
 
@@ -1709,7 +1765,7 @@ LICENSE.md: [License text](#license-text-e8f880affb8c7bfed3218541288ade927e0fbc4
 
 License: Apache-2.0 OR MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc)
 
@@ -1851,9 +1907,17 @@ LICENSE.md: [License text](#license-text-42a35170233e83e18856792e748de4c1ce4a63b
 
 License: MIT
 
-Lockfiles: `doc2md/component/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE.md: [License text](#license-text-42a35170233e83e18856792e748de4c1ce4a63b2afce9a370c89ef3fe23f9f2d)
+
+### cargo: siphasher@1.0.2
+
+License: MIT/Apache-2.0
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+COPYING: [License text](#license-text-c962ee4d1d05ddc138b202b2540219ebc57893fcf97b364852094a9a94ce1365)
 
 ### cargo: siphasher@1.0.3
 
@@ -1867,7 +1931,7 @@ COPYING: [License text](#license-text-c962ee4d1d05ddc138b202b2540219ebc57893fcf9
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a14f7d685a79c0f4fb64aee305527a6d5fa55f2401f4e6d688d7b1301868e6c0)
 
@@ -1880,6 +1944,16 @@ License: MIT
 Lockfiles: `doc2md/component/Cargo.lock`
 
 LICENSE: [License text](#license-text-8ce0830173fdac609dfb4ea603fdc002c2f4af0dc9b1a005653f5da9cf534b18)
+
+### cargo: smallvec@1.15.1
+
+License: MIT OR Apache-2.0
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
+
+LICENSE-MIT: [License text](#license-text-0b28172679e0009b655da42797c03fd163a3379d5cfa67ba1f1655e974a2a1a9)
 
 ### cargo: smallvec@1.15.2
 
@@ -1915,7 +1989,7 @@ LICENSE-MIT: [License text](#license-text-7003375a1162b7510d6f053c4a505a0771bbc3
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2)
 
@@ -1941,7 +2015,7 @@ LICENSE: [License text](#license-text-8bce3b45e49ecd1461f223b46de133d8f62cd39f74
 
 License: MIT OR Apache-2.0
 
-Lockfiles: `doc2md/component/vendor/unpdf/Cargo.lock`
+Lockfiles: `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a)
 
@@ -1961,7 +2035,7 @@ LICENSE-MIT: [License text](#license-text-23f18e03dc49df91622fe2a76176497404e46c
 
 License: MIT
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-219920e865eee70b7dcfc948a86b099e7f4fe2de01bcca2ca9a20c0a033f2b59)
 
@@ -2089,7 +2163,7 @@ LICENSE-MIT: [License text](#license-text-7b63ecd5f1902af1b63729947373683c32745c
 
 License: (MIT OR Apache-2.0) AND Unicode-3.0
 
-Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`, `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a)
 
@@ -2599,6 +2673,14 @@ Lockfiles: `doc2md/component/Cargo.lock`
 
 LICENSE: [License text](#license-text-5b55b824fe7c2babf4a6e8745dffa8f41282c8304a293861f48eeddd022c5a2c)
 
+### cargo: yoke@0.8.2
+
+License: Unicode-3.0
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE: [License text](#license-text-f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2)
+
 ### cargo: yoke@0.8.3
 
 License: Unicode-3.0
@@ -2611,7 +2693,7 @@ LICENSE: [License text](#license-text-f367c1b8e1aa262435251e442901da4607b4650e0e
 
 License: Unicode-3.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2)
 
@@ -2639,6 +2721,14 @@ LICENSE-BSD: [License text](#license-text-83c1763356e822adde0a2cae748d938a73fdc2
 
 LICENSE-MIT: [License text](#license-text-1a2f5c12ddc934d58956aa5dbdd3255fe55fd957633ab7d0d39e4f0daa73f7df)
 
+### cargo: zerofrom@0.1.7
+
+License: Unicode-3.0
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE: [License text](#license-text-f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2)
+
 ### cargo: zerofrom@0.1.8
 
 License: Unicode-3.0
@@ -2651,7 +2741,7 @@ LICENSE: [License text](#license-text-f367c1b8e1aa262435251e442901da4607b4650e0e
 
 License: Unicode-3.0
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE: [License text](#license-text-f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2)
 
@@ -2662,6 +2752,14 @@ License: MIT
 Lockfiles: `doc2md/component/Cargo.lock`
 
 LICENSE: [License text](#license-text-04dc52136d82400b11df5f474949863a70a5d05d2278dec45b99c479494450a6)
+
+### cargo: zlib-rs@0.6.3
+
+License: Zlib
+
+Lockfiles: `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
+
+LICENSE: [License text](#license-text-e72111c52b7d96ebe25348dee19f0744f444d3c95ae6b1ecb6ccaecc5bce05ba)
 
 ### cargo: zmij@1.0.21
 
@@ -2683,7 +2781,7 @@ COPYING: [License text](#license-text-018b1cb87efdf7a04c2fcc13d57ed63f62149113fb
 
 License: MIT OR Apache-2.0 OR Zlib
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4)
 
@@ -2695,7 +2793,7 @@ LICENSE-ZLIB: [License text](#license-text-d201d14804d3bcd3b944147173175e4abfbd8
 
 License: MIT OR Apache-2.0 OR Zlib
 
-Lockfiles: `pdf2image/component/Cargo.lock`
+Lockfiles: `pdf2image/component/Cargo.lock`, `pdf2image/component/vendor/hayro-interpret/Cargo.lock`
 
 LICENSE-APACHE: [License text](#license-text-c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4)
 
@@ -11086,6 +11184,30 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+## License text e72111c52b7d96ebe25348dee19f0744f444d3c95ae6b1ecb6ccaecc5bce05ba
+
+```text
+(C) 2024 Trifecta Tech Foundation
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+
+3. This notice may not be removed or altered from any source distribution.
 ```
 
 ## License text e8f880affb8c7bfed3218541288ade927e0fbc463f51402f4113c07b94b2abdd
