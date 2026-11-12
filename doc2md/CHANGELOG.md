@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.22](https://github.com/kicksideai/converters/compare/doc2md-v0.8.21...doc2md-v0.8.22) (2026-11-12)
+
+
+### Bug Fixes
+
+* **doc2md:** strip markers without lazy pattern quantifiers ([#29](https://github.com/kicksideai/converters/issues/29)) ([944a271](https://github.com/kicksideai/converters/commit/944a271bfad30f9508d53dcee10f1f42925c4c6f))
+
 ## [0.8.21](https://github.com/kicksideai/converters/compare/doc2md-v0.8.20...doc2md-v0.8.21) (2026-11-12)
 
 
