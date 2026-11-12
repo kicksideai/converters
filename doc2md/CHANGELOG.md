@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.21](https://github.com/kicksideai/converters/compare/doc2md-v0.8.20...doc2md-v0.8.21) (2026-11-12)
+
+
+### Bug Fixes
+
+* **doc2md:** omit images with only None DeviceN colorants ([#26](https://github.com/kicksideai/converters/issues/26)) ([1497ff2](https://github.com/kicksideai/converters/commit/1497ff265d148b25bcd6d25b20ca3413f959a33e))
+
 ## [0.8.20](https://github.com/kicksideai/converters/compare/doc2md-v0.8.19...doc2md-v0.8.20) (2026-11-11)
 
 
