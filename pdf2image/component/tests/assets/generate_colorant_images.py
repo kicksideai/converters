@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Generate a synthetic scanned pattern and full-page colorant image overlays."""
 from pathlib import Path
 
