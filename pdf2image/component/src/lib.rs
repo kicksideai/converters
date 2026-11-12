@@ -302,6 +302,42 @@ bindings::export!(Component with_types_in bindings);
 mod tests {
     use super::*;
 
+    fn colorant_page(page: usize) -> Vec<u8> {
+        let pdf = load(include_bytes!("../tests/assets/colorant-images.pdf").to_vec()).unwrap();
+        render(
+            &pdf.pages()[page],
+            &RenderCache::new(),
+            &font_settings(),
+            &RenderSettings::default(),
+        )
+        .into_png()
+        .unwrap()
+    }
+
+    #[test]
+    fn separation_none_image_preserves_scanned_pixels() {
+        let scan = colorant_page(0);
+        assert_ne!(scan, colorant_page(5), "scan differs from opaque gray");
+        assert_eq!(colorant_page(1), scan);
+    }
+
+    #[test]
+    fn devicen_all_none_image_preserves_scanned_pixels() {
+        assert_eq!(colorant_page(3), colorant_page(0));
+    }
+
+    #[test]
+    fn separation_real_colorant_image_paints() {
+        assert_eq!(colorant_page(2), colorant_page(5));
+        assert_ne!(colorant_page(2), colorant_page(0));
+    }
+
+    #[test]
+    fn devicen_mixed_colorants_image_paints() {
+        assert_eq!(colorant_page(4), colorant_page(5));
+        assert_ne!(colorant_page(4), colorant_page(0));
+    }
+
     fn scaling(scale: f32, dpi: f32) -> ScalingOptions {
         ScalingOptions { dpi, scale }
     }
