@@ -1647,6 +1647,32 @@ mod tests {
         RawBackend::load_bytes(pdf.as_bytes()).unwrap()
     }
 
+    #[test]
+    fn devicen_none_colorants_do_not_paint() {
+        let backend = text_backend("<< >>", &["/None".into()]);
+        for (names, paints) in [
+            ("/None /None", false),
+            ("/#4Eone 5 0 R", false),
+            ("/None /Spot", true),
+            ("/Spot /None", true),
+            ("/Cyan /Magenta", true),
+        ] {
+            let source = format!("[/DeviceN [{names}] /DeviceGray << /FunctionType 2 /Domain [0 1 0 1] /C0 [0] /C1 [1] /N 1 >>]");
+            let (object, _) = super::super::raw::tokenizer::parse_object(source.as_bytes(), 0).unwrap();
+            let space = resolve_color_space(&backend.doc, &object, None, 0).unwrap();
+            assert_eq!(space.components(), 2);
+            assert_eq!(space.paints(), paints, "{names}");
+            let mut stored = serde_json::to_value(&space).unwrap();
+            stored["DeviceN"].as_object_mut().unwrap().remove("names");
+            let without_names: ColorSpace = serde_json::from_value(stored).unwrap();
+            assert_eq!(without_names.components(), 2);
+            assert!(without_names.paints());
+            if paints {
+                assert_eq!(space.to_rgb(&[0.5, 0.5]), Some([0.5; 3]), "{names}");
+            }
+        }
+    }
+
     fn tounicode_backend(cmap: &str) -> RawBackend {
         text_backend(
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 5 0 R >>",
