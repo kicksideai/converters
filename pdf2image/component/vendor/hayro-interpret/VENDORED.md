@@ -32,6 +32,7 @@ spaces whose colorants are all `/None` leave the page untouched, as required
 by ISO 32000-1 sections 8.6.6.4 and 8.6.6.5. Stencil images retain their existing
 paint behavior. Real Separation colorants and mixed DeviceN colorants retain
 the existing conversion and painting path.
+The same rule covers inline images, including named color spaces resolved through page resources.
 
 The component's generated `tests/assets/colorant-images.pdf` overlays a
 synthetic scanned pattern. Native regressions compare nonpainting overlays to
@@ -43,3 +44,29 @@ Remove the trailing space on the final license sentence so the imported tree
 passes Git whitespace checks. The text is unchanged.
 
 No other hayro-interpret sources are modified.
+
+## Render comparison
+
+From the repository root, compare committed revisions with:
+
+```sh
+python3 pdf2image/component/tests/compare_renders.py \
+  --baseline origin/main --candidate HEAD --work-dir /path/to/new/comparison-directory
+```
+
+The script extracts each revision into the supplied directory, retains its Cargo
+lock, and runs the same native snapshot test against both components. It compares
+encoded bytes directly and records each output's SHA-256 in `comparison.json`.
+Inputs are the existing `sample.pdf` component asset and the `pdf` and `text_pdf`
+Lua fixtures (four pages total). Each page renders at scales 1 and 2.0833333
+(72 and 150 DPI), with white and transparent backgrounds, in PNG, JPEG (quality
+90), and lossless WebP. Other rendering settings and embedded font resolution
+use the component defaults.
+
+The pre-vendoring `origin/main` snapshot
+`78ff12add8fdaa87c6b2937d4bc77551d5cd7a20` and merged patch revision
+`1497ff265d148b25bcd6d25b20ca3413f959a33e` produce 48 byte-identical outputs
+with rustc 1.96.0. Reproduce that comparison by passing those commit hashes as
+`--baseline` and `--candidate`. The sorted output manifest (filename, byte length,
+SHA-256; JSON with sorted keys) has SHA-256
+`9a9bf0c8c719909129d1c1b199b2c549e0290e37043f9c31cd204f94293192e9`.
