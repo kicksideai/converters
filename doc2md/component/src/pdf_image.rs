@@ -480,7 +480,11 @@ mod tests {
                     dict: "/FunctionType 4 /Domain [0 1 0 1] /Range [0 1]",
                     stream: Some(b"{ pop }"),
                 }]);
-            assert_eq!(extracted_png(&pdf), (png::ColorType::Grayscale, vec![128]), "{names}");
+            assert_eq!(
+                extracted_png(&pdf),
+                (png::ColorType::Grayscale, vec![128]),
+                "{names}"
+            );
         }
     }
 
@@ -847,6 +851,7 @@ mod tests {
             std::iter::once(ColorSpace::Cmyk).chain(functions.into_iter().map(|tint_transform| {
                 ColorSpace::DeviceN {
                     components: 2,
+                    names: Vec::new(),
                     alternate: Box::new(ColorSpace::Cmyk),
                     tint_transform,
                 }

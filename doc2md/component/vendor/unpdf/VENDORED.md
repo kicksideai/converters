@@ -121,4 +121,19 @@ at the glyph decoding exit. The component regression
 `convert_pdf_drops_nul_from_tounicode_mapped_glyphs` and the Lua convert suite
 exercise the resulting Markdown.
 
+### 6. Nonpainting DeviceN Images (`src/parser/backend.rs`, `src/model/color.rs`)
+
+DeviceN resolution retains each colorant name, including resolved references and
+PDF name escapes. `ColorSpace::paints` treats DeviceN spaces whose colorants are
+all `/None` as nonpainting, matching Separation `/None` and ISO 32000-1 section
+8.6.6.5. The shared resource converter consequently emits no image for these
+resources, including encoded JPEG and JPX streams. Their page resource counts
+remain intact. Mixed and real colorants retain the existing tint conversion.
+
+The serialized component count remains present. Colorant names are an optional
+field; data without names retains its existing painting behavior. Backend tests
+cover reserved, escaped, indirect, mixed, and real names and deserialization
+without names. Component tests cover omitted image artifacts, retained page
+counts, encoded streams, and unchanged pixels for painting colorants.
+
 No other unpdf sources are modified.

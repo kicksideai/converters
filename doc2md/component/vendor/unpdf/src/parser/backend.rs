@@ -1418,11 +1418,18 @@ fn resolve_color_space(
                     });
                 }
             }
-            let components = if family == b"Separation" {
-                1
+            let names = if family == b"DeviceN" {
+                doc.resolve(params.first()?)
+                    .as_array()?
+                    .iter()
+                    .map(|name| {
+                        Some(String::from_utf8_lossy(doc.resolve(name).as_name()?).into_owned())
+                    })
+                    .collect::<Option<Vec<_>>>()?
             } else {
-                doc.resolve(params.first()?).as_array()?.len()
+                Vec::new()
             };
+            let components = if colorant.is_some() { 1 } else { names.len() };
             let alternate = resolve_color_space(doc, params.get(1)?, named, depth + 1)?;
             let tint_transform = resolve_function(doc, params.get(2)?, depth + 1)?;
             if components == 0
@@ -1438,6 +1445,7 @@ fn resolve_color_space(
                 },
                 None => ColorSpace::DeviceN {
                     components,
+                    names,
                     alternate: Box::new(alternate),
                     tint_transform,
                 },
@@ -1658,7 +1666,8 @@ mod tests {
             ("/Cyan /Magenta", true),
         ] {
             let source = format!("[/DeviceN [{names}] /DeviceGray << /FunctionType 2 /Domain [0 1 0 1] /C0 [0] /C1 [1] /N 1 >>]");
-            let (object, _) = super::super::raw::tokenizer::parse_object(source.as_bytes(), 0).unwrap();
+            let (object, _) =
+                super::super::raw::tokenizer::parse_object(source.as_bytes(), 0).unwrap();
             let space = resolve_color_space(&backend.doc, &object, None, 0).unwrap();
             assert_eq!(space.components(), 2);
             assert_eq!(space.paints(), paints, "{names}");
