@@ -83,6 +83,22 @@ local function normalize_options(options: ConvertOptions?): (Settings?, string?)
     return { extract_images = options.extract_images == true, page_markers = options.page_markers == true }, nil
 end
 
+local SLIDE_CLOSE = " -->"
+
+-- slide_marker splits a `<!-- slide N<rest> -->` line into N and rest without
+-- lazy quantifiers, so the cost is linear in the line length.
+local function slide_marker(line: string): (string?, string?)
+    local number, after = line:match("^<!%-%- slide (%d+)()")
+    if number == nil or after == nil then
+        return nil, nil
+    end
+    local close = #line - #SLIDE_CLOSE + 1
+    if close < after or line:sub(close) ~= SLIDE_CLOSE then
+        return nil, nil
+    end
+    return number, line:sub(after, close - 1)
+end
+
 -- markers returns the hidden page and slide comments that convert inserts when
 -- page_markers is set, in document order. A marker occupies its own line:
 -- `<!-- page N -->` or `<!-- slide N -->` / `<!-- slide N: Name -->`.
@@ -99,7 +115,7 @@ local function markers(markdown: string): { Marker }
         if page ~= nil then
             found[#found + 1] = { kind = "page", number = math.tointeger(tonumber(page)) :: integer, start = position, finish = line_end - 1 }
         else
-            local slide, rest = line:match("^<!%-%- slide (%d+)(.-) %-%->$")
+            local slide, rest = slide_marker(line)
             if slide ~= nil then
                 local name: string? = nil
                 if type(rest) == "string" then
@@ -117,10 +133,15 @@ end
 -- without them.
 local function strip_markers(text: string): string
     local kept = {}
-    for line in (text .. "\n"):gmatch("(.-)\n") do
-        if not (line:match("^<!%-%- page %d+ %-%->$") or line:match("^<!%-%- slide %d+.- %-%->$")) then
+    local position = 1
+    local length = #text
+    while position <= length + 1 do
+        local line_end = text:find("\n", position, true) or (length + 1)
+        local line = text:sub(position, line_end - 1)
+        if not (line:match("^<!%-%- page %d+ %-%->$") or slide_marker(line) ~= nil) then
             kept[#kept + 1] = line
         end
+        position = line_end + 1
     end
     return table.concat(kept, "\n")
 end
