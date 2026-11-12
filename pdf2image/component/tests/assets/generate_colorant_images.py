@@ -23,18 +23,26 @@ def generate():
               f"[/DeviceN [/None /None] /DeviceGray {tint} 0 R]",
               f"[/DeviceN [/None /Spot] /DeviceGray {tint} 0 R]", "/DeviceGray"]
     kids = []
-    for space in spaces:
+    cases = [(space, False) for space in spaces] + [(space, True) for space in spaces[1:5]]
+    for space, inline in cases:
         resources = f"/Scan {scan} 0 R"
-        commands = "q 64 0 0 64 0 0 cm /Scan Do Q"
+        commands = b"q 64 0 0 64 0 0 cm /Scan Do Q"
+        color_resources = ""
         if space is not None:
-            overlay = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 "
-                             f"/BitsPerComponent 8 /ColorSpace {space}",
-                             bytes([128, 128]) if space.startswith("[/DeviceN") else bytes([128]))
-            resources += f" /Overlay {overlay} 0 R"
-            commands += " q 64 0 0 64 0 0 cm /Overlay Do Q"
-        content = stream("", commands.encode())
+            samples = bytes([128, 128]) if space.startswith("[/DeviceN") else bytes([128])
+            if inline:
+                color_resources = f"/ColorSpace << /OverlaySpace {space} >>"
+                commands += (b" q 64 0 0 64 0 0 cm BI /W 1 /H 1 /BPC 8 /CS /OverlaySpace ID\n"
+                             + samples + b"\nEI Q")
+            else:
+                overlay = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 "
+                                 f"/BitsPerComponent 8 /ColorSpace {space}", samples)
+                resources += f" /Overlay {overlay} 0 R"
+                commands += b" q 64 0 0 64 0 0 cm /Overlay Do Q"
+        content = stream("", commands)
         page = add(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 64 64] "
-                   f"/Resources << /XObject << {resources} >> >> /Contents {content} 0 R >>".encode())
+                   f"/Resources << /XObject << {resources} >> {color_resources} >> "
+                   f"/Contents {content} 0 R >>".encode())
         kids.append(f"{page} 0 R")
     objects[1] = f"<< /Type /Pages /Count {len(kids)} /Kids [{' '.join(kids)}] >>".encode()
     pdf, offsets = bytearray(b"%PDF-1.4\n"), []

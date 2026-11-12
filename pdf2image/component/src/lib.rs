@@ -342,6 +342,28 @@ mod tests {
         assert_ne!(colorant_page(4), colorant_page(0));
     }
 
+    #[test]
+    fn separation_none_inline_image_preserves_scanned_pixels() {
+        assert_eq!(colorant_page(6), colorant_page(0));
+    }
+
+    #[test]
+    fn devicen_all_none_inline_image_preserves_scanned_pixels() {
+        assert_eq!(colorant_page(8), colorant_page(0));
+    }
+
+    #[test]
+    fn separation_real_colorant_inline_image_paints() {
+        assert_eq!(colorant_page(7), colorant_page(5));
+        assert_ne!(colorant_page(7), colorant_page(0));
+    }
+
+    #[test]
+    fn devicen_mixed_colorants_inline_image_paints() {
+        assert_eq!(colorant_page(9), colorant_page(5));
+        assert_ne!(colorant_page(9), colorant_page(0));
+    }
+
     fn scaling(scale: f32, dpi: f32) -> ScalingOptions {
         ScalingOptions { dpi, scale }
     }
