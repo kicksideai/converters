@@ -251,6 +251,23 @@ local function define()
             test.eq(#doc2md.markers("inline <!-- page 4 --> is not a marker line"), 0)
         end)
 
+        test.it("strips markers around lines longer than the pattern backtrack budget", function()
+            local long_line = string.rep("lorem ipsum dolor sit amet ", 9000)
+            local body = "short line\n" .. long_line .. "\nlast line\n"
+            local markdown = "<!-- page 1 -->\n" .. body .. "<!-- slide 2: Plans -->\n" .. body .. "<!-- page 3 -->\n" .. body .. "tail"
+            test.eq(#long_line > 200000, true)
+            test.eq(doc2md.strip_markers(markdown), body .. body .. body .. "tail")
+            local found = doc2md.markers(markdown)
+            test.eq(#found, 3)
+            test.eq(found[2].name, "Plans")
+        end)
+
+        test.it("strips edge-case inputs", function()
+            test.eq(doc2md.strip_markers(""), "")
+            test.eq(doc2md.strip_markers("a\n<!-- slide 1 -->\nb\n"), "a\nb\n")
+            test.eq(doc2md.strip_markers("<!-- slide 1-->\n<!-- slide x -->"), "<!-- slide 1-->\n<!-- slide x -->")
+        end)
+
         test.it("converts XLSX to a markdown table", function()
             local document, err = convert(fixtures.xlsx, false)
             test.is_nil(err)
