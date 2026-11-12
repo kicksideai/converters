@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.16](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.15...pdf2image-v0.7.16) (2026-11-12)
+
+
+### Bug Fixes
+
+* **pdf2image:** preserve pixels under nonpainting image colorants ([#25](https://github.com/kicksideai/converters/issues/25)) ([b7098c6](https://github.com/kicksideai/converters/commit/b7098c688be8c7a4c7f86d49a6e48b414c3493f2))
+
 ## [0.7.15](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.14...pdf2image-v0.7.15) (2026-11-11)
 
 
