@@ -449,6 +449,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hayro-ccitt"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adbed896e99325bc312778bb9c9c289d795d51c12775c44dd5e4352f679c7e46"
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -975,6 +981,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "flate2",
+ "hayro-ccitt",
  "log",
  "md-5",
  "rayon",

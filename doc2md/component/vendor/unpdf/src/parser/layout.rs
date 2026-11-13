@@ -477,7 +477,7 @@ impl<'a> LayoutAnalyzer<'a> {
         fonts: &HashMap<Vec<u8>, FontInfo>,
         page_id: super::backend::PageId,
     ) -> Result<Vec<TextSpan>> {
-        let operations = self.backend.decode_content(content)?;
+        let operations = self.backend.decode_page_content(page_id, content)?;
 
         let mut spans = Vec::new();
         let mut current_font = String::new();

@@ -152,3 +152,9 @@ XObjects. `page_xobjects_are_the_ones_its_content_paints` covers shared
 resources, unpainted entries, repeated paints and a nested form.
 
 No other unpdf sources are modified.
+
+Painted-image traversal identifies resources by PDF object reference, follows
+Forms, tiling patterns, soft masks, Type 3 glyphs and annotation appearances,
+and separates decoding from the page-composition count. Inline-image boundaries
+come from sample layout or encoded filter boundaries, including CCITT via
+hayro-ccitt, so sample bytes cannot terminate the content walk.

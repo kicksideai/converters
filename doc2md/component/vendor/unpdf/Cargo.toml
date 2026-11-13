@@ -115,6 +115,9 @@ features = [
 [dependencies.flate2]
 version = "1.1"
 
+[dependencies.hayro-ccitt]
+version = "0.5"
+
 [dependencies.log]
 version = "0.4"
 

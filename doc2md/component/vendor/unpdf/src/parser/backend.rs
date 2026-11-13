@@ -85,6 +85,14 @@ pub struct RawXObject {
     pub samples: Option<SampleLayout>,
 }
 
+/// Decoded resources and their page-composition signal. Reusing an object does
+/// not decode it again, but still adds a paint to the count.
+#[derive(Default)]
+pub struct RawPageXObjects {
+    pub objects: Vec<RawXObject>,
+    pub paint_count: u32,
+}
+
 /// Abstract interface for PDF document access.
 ///
 /// Implementations provide page enumeration, font info, content stream
@@ -102,6 +110,10 @@ pub trait PdfBackend: Send + Sync {
     /// Parse raw content stream bytes into a sequence of operations.
     fn decode_content(&self, data: &[u8]) -> Result<Vec<ContentOp>>;
 
+    fn decode_page_content(&self, _page: PageId, data: &[u8]) -> Result<Vec<ContentOp>> {
+        self.decode_content(data)
+    }
+
     /// Decode a text byte sequence using the font's encoding on the given page.
     /// Falls back to simple decoding if the font or encoding is unavailable.
     fn decode_text(&self, page: PageId, font_name: &[u8], bytes: &[u8]) -> String;
@@ -118,7 +130,7 @@ pub trait PdfBackend: Send + Sync {
     fn outline(&self) -> Result<Vec<RawOutlineItem>>;
 
     /// Return XObjects (images) from a page.
-    fn page_xobjects(&self, page: PageId) -> Result<Vec<RawXObject>>;
+    fn page_xobjects(&self, page: PageId) -> Result<RawPageXObjects>;
 
     /// Extract AcroForm fields from the document.
     fn acroform_fields(&self) -> Vec<FormField> {
@@ -154,6 +166,8 @@ use super::raw::RawDocument;
 pub struct RawBackend {
     doc: RawDocument,
     font_resolver: RawFontResolver,
+    #[cfg(test)]
+    image_decodes: std::sync::atomic::AtomicUsize,
 }
 
 impl RawBackend {
@@ -169,6 +183,8 @@ impl RawBackend {
         Ok(Self {
             doc,
             font_resolver: RawFontResolver::new(),
+            #[cfg(test)]
+            image_decodes: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -200,8 +216,9 @@ impl PdfBackend for RawBackend {
             .get_dict(page_id)
             .map_err(|e| Error::PdfParse(e.to_string()))?;
 
-        let contents = raw_dict_get(page_dict, b"Contents")
-            .ok_or_else(|| Error::PdfParse("No Contents in page".to_string()))?;
+        let Some(contents) = raw_dict_get(page_dict, b"Contents") else {
+            return Ok(Vec::new());
+        };
 
         let contents = self.doc.resolve(contents);
 
@@ -250,6 +267,10 @@ impl PdfBackend for RawBackend {
 
     fn decode_content(&self, data: &[u8]) -> Result<Vec<ContentOp>> {
         raw_content::parse_content_stream(data)
+    }
+
+    fn decode_page_content(&self, page: PageId, data: &[u8]) -> Result<Vec<ContentOp>> {
+        self.decode_with_resources(data, self.page_resources(page))
     }
 
     fn decode_text(&self, page: PageId, font_name: &[u8], bytes: &[u8]) -> String {
@@ -326,27 +347,46 @@ impl PdfBackend for RawBackend {
         Ok(items)
     }
 
-    fn page_xobjects(&self, page: PageId) -> Result<Vec<RawXObject>> {
-        let mut xobjects = Vec::new();
+    fn page_xobjects(&self, page: PageId) -> Result<RawPageXObjects> {
+        let mut xobjects = RawPageXObjects::default();
 
-        let page_dict = self
-            .doc
-            .get_dict(page)
-            .map_err(|e| Error::PdfParse(e.to_string()))?;
-
-        let res_dict = match raw_dict_get(page_dict, b"Resources")
-            .and_then(|r| raw_resolve_dict(&self.doc, r))
-        {
-            Some(d) => d,
-            None => return Ok(xobjects),
-        };
-
-        let ops = match self.page_content(page) {
-            Ok(content) => self.decode_content(&content)?,
-            Err(_) => return Ok(xobjects),
-        };
+        let empty_resources = RawPdfDict::new();
+        let res_dict = self.page_resources(page).unwrap_or(&empty_resources);
         let mut seen = std::collections::HashSet::new();
-        self.painted_xobjects(&ops, res_dict, "", 0, &mut seen, &mut xobjects);
+        let content = self.page_content(page)?;
+        let ops = self.decode_with_resources(&content, Some(res_dict))?;
+        self.painted_xobjects(&ops, res_dict, &mut seen, &mut xobjects)?;
+        let page_dict = self.doc.get_dict(page)?;
+        if let Some(annotations) =
+            raw_dict_get(page_dict, b"Annots").and_then(|r| self.doc.resolve(r).as_array())
+        {
+            for annotation in annotations {
+                let Some(dict) = raw_resolve_dict(&self.doc, annotation) else {
+                    continue;
+                };
+                let flags = raw_dict_get(dict, b"F")
+                    .and_then(|r| r.as_i64())
+                    .unwrap_or(0);
+                if flags & 3 != 0 {
+                    continue;
+                }
+                let normal = raw_dict_get(dict, b"AP")
+                    .and_then(|r| raw_resolve_dict(&self.doc, r))
+                    .and_then(|dict| raw_dict_get(dict, b"N"));
+                if let Some(normal) = normal {
+                    let appearance = if let Some(states) = self.doc.resolve(normal).as_dict() {
+                        raw_dict_get(dict, b"AS")
+                            .and_then(|r| r.as_name())
+                            .and_then(|name| raw_dict_get(states, name))
+                    } else {
+                        Some(normal)
+                    };
+                    if let Some(appearance) = appearance {
+                        self.painted_stream(appearance, res_dict, &mut seen, &mut xobjects)?;
+                    }
+                }
+            }
+        }
         Ok(xobjects)
     }
 
@@ -356,66 +396,199 @@ impl PdfBackend for RawBackend {
 }
 
 impl RawBackend {
-    /// Collect the XObjects a content stream paints with `Do`, in paint order,
-    /// descending into painted Form XObjects. Names inside a form are prefixed
-    /// with the form's name so they stay distinct from page-level names.
+    fn page_resources(&self, mut page: PageId) -> Option<&RawPdfDict> {
+        let mut seen = std::collections::HashSet::new();
+        while seen.insert(page) {
+            let dict = self.doc.get_dict(page).ok()?;
+            if let Some(resources) = raw_dict_get(dict, b"Resources") {
+                return raw_resolve_dict(&self.doc, resources);
+            }
+            page = raw_dict_get(dict, b"Parent")?.as_reference()?;
+        }
+        None
+    }
+
+    fn decode_with_resources(
+        &self,
+        data: &[u8],
+        resources: Option<&RawPdfDict>,
+    ) -> Result<Vec<ContentOp>> {
+        let named = resources
+            .and_then(|r| raw_dict_get(r, b"ColorSpace"))
+            .and_then(|r| raw_resolve_dict(&self.doc, r));
+        raw_content::parse_content_stream_with_colors(data, |color| {
+            resolve_color_space(&self.doc, color, named, 0).map(|space| space.components())
+        })
+    }
+
+    /// Follow image-bearing content streams in paint order. Object references
+    /// identify extracted resources independently of names in resource dictionaries.
     fn painted_xobjects(
         &self,
         ops: &[ContentOp],
         res_dict: &RawPdfDict,
-        prefix: &str,
-        depth: usize,
         seen: &mut std::collections::HashSet<(u32, u16)>,
-        xobjects: &mut Vec<RawXObject>,
-    ) {
-        let xobj_dict =
-            match raw_dict_get(res_dict, b"XObject").and_then(|x| raw_resolve_dict(&self.doc, x)) {
-                Some(d) => d,
-                None => return,
-            };
-        for op in ops.iter().filter(|op| op.operator == "Do") {
-            let Some(PdfValue::Name(name)) = op.operands.last() else {
-                continue;
-            };
-            let Some(reference) = raw_dict_get(xobj_dict, name).and_then(|o| o.as_reference())
-            else {
-                continue;
-            };
-            if !seen.insert(reference) {
-                continue;
-            }
-            let Some(raw_obj) = self.doc.get_object(reference) else {
-                continue;
-            };
-            let Some(stream) = self.doc.resolve(raw_obj).as_stream() else {
-                continue;
-            };
-            let name = format!("{prefix}{}", String::from_utf8_lossy(name));
-            let Some(xobject) = self.raw_xobject(name, stream, res_dict) else {
-                continue;
-            };
-            let form = xobject.subtype == "Form";
-            let form_name = format!("{}_", xobject.name);
-            xobjects.push(xobject);
-            if form && depth < MAX_FORM_DEPTH {
-                let form_res = raw_dict_get(&stream.dict, b"Resources")
-                    .and_then(|r| raw_resolve_dict(&self.doc, r))
-                    .unwrap_or(res_dict);
-                let form_ops = raw_stream::decompress(stream, |o| self.doc.resolve(o))
-                    .ok()
-                    .and_then(|content| self.decode_content(&content).ok());
-                if let Some(form_ops) = form_ops {
-                    self.painted_xobjects(
-                        &form_ops,
-                        form_res,
-                        &form_name,
-                        depth + 1,
-                        seen,
-                        xobjects,
-                    );
+        xobjects: &mut RawPageXObjects,
+    ) -> Result<()> {
+        let resource = |category: &[u8], name: &[u8]| {
+            raw_dict_get(res_dict, category)
+                .and_then(|r| raw_resolve_dict(&self.doc, r))
+                .and_then(|dict| raw_dict_get(dict, name))
+        };
+        let mut font = None;
+        let mut saved_fonts = Vec::new();
+        for op in ops {
+            match op.operator.as_str() {
+                "BI" => xobjects.paint_count += 1,
+                "Do" | "scn" | "SCN" => {
+                    let Some(PdfValue::Name(name)) = op.operands.last() else {
+                        continue;
+                    };
+                    let category: &[u8] = if op.operator == "Do" {
+                        b"XObject"
+                    } else {
+                        b"Pattern"
+                    };
+                    if let Some(object) = resource(category, name) {
+                        self.painted_stream(object, res_dict, seen, xobjects)?;
+                    }
                 }
+                "gs" => {
+                    let Some(PdfValue::Name(name)) = op.operands.last() else {
+                        continue;
+                    };
+                    let state =
+                        resource(b"ExtGState", name).and_then(|r| raw_resolve_dict(&self.doc, r));
+                    if let Some(state) = state {
+                        if let Some(mask) = raw_dict_get(state, b"SMask")
+                            .and_then(|r| raw_resolve_dict(&self.doc, r))
+                            .and_then(|dict| raw_dict_get(dict, b"G"))
+                        {
+                            self.painted_stream(mask, res_dict, seen, xobjects)?;
+                        }
+                        if let Some(value) = raw_dict_get(state, b"Font")
+                            .and_then(|r| self.doc.resolve(r).as_array())
+                            .and_then(|array| array.first())
+                        {
+                            font = raw_resolve_dict(&self.doc, value);
+                        }
+                    }
+                }
+                "Tf" => {
+                    if let Some(PdfValue::Name(name)) = op.operands.first() {
+                        font = resource(b"Font", name).and_then(|r| raw_resolve_dict(&self.doc, r));
+                    }
+                }
+                "q" => saved_fonts.push(font),
+                "Q" => {
+                    if let Some(saved) = saved_fonts.pop() {
+                        font = saved;
+                    }
+                }
+                "Tj" | "TJ" | "'" | "\"" => {
+                    if let Some(font) = font {
+                        for operand in &op.operands {
+                            self.painted_glyphs(operand, font, res_dict, seen, xobjects)?;
+                        }
+                    }
+                }
+                _ => (),
             }
         }
+        Ok(())
+    }
+
+    fn painted_stream(
+        &self,
+        object: &RawPdfObject,
+        resources: &RawPdfDict,
+        seen: &mut std::collections::HashSet<(u32, u16)>,
+        xobjects: &mut RawPageXObjects,
+    ) -> Result<()> {
+        let Some(reference) = object.as_reference() else {
+            return Ok(());
+        };
+        let Some(stream) = self.doc.resolve(object).as_stream() else {
+            return Ok(());
+        };
+        xobjects.paint_count += 1;
+        if !seen.insert(reference) {
+            return Ok(());
+        }
+        let subtype = raw_dict_get(&stream.dict, b"Subtype").and_then(|s| s.as_name());
+        let name = format!("object_{}_{}", reference.0, reference.1);
+        if subtype == Some(b"Image") {
+            if let Some(image) = self.raw_xobject(name, stream, resources) {
+                xobjects.objects.push(image);
+            }
+        } else {
+            if subtype == Some(b"Form") {
+                if let Some(form) = self.raw_xobject(name, stream, resources) {
+                    xobjects.objects.push(form);
+                }
+            }
+            let resources = raw_dict_get(&stream.dict, b"Resources")
+                .and_then(|r| raw_resolve_dict(&self.doc, r))
+                .unwrap_or(resources);
+            let content = raw_stream::decompress(stream, |o| self.doc.resolve(o))?;
+            let ops = self.decode_with_resources(&content, Some(resources))?;
+            self.painted_xobjects(&ops, resources, seen, xobjects)?;
+        }
+        Ok(())
+    }
+
+    fn painted_glyphs(
+        &self,
+        operand: &PdfValue,
+        font: &RawPdfDict,
+        resources: &RawPdfDict,
+        seen: &mut std::collections::HashSet<(u32, u16)>,
+        xobjects: &mut RawPageXObjects,
+    ) -> Result<()> {
+        if raw_dict_get(font, b"Subtype").and_then(|s| s.as_name()) != Some(b"Type3") {
+            return Ok(());
+        }
+        if let PdfValue::Array(values) = operand {
+            for value in values {
+                self.painted_glyphs(value, font, resources, seen, xobjects)?;
+            }
+        }
+        let PdfValue::Str(bytes) = operand else {
+            return Ok(());
+        };
+        let Some(glyphs) =
+            raw_dict_get(font, b"CharProcs").and_then(|r| raw_resolve_dict(&self.doc, r))
+        else {
+            return Ok(());
+        };
+        let encoding_obj = raw_dict_get(font, b"Encoding").map(|r| self.doc.resolve(r));
+        let encoding = encoding_obj.and_then(|r| raw_resolve_dict(&self.doc, r));
+        let differences = encoding
+            .map(|dict| self.font_resolver.parse_differences(&self.doc, dict))
+            .unwrap_or_default();
+        let base = encoding
+            .and_then(|dict| raw_dict_get(dict, b"BaseEncoding"))
+            .or(encoding_obj)
+            .and_then(|r| r.as_name())
+            .and_then(BaseEncoding::from_name)
+            .unwrap_or(BaseEncoding::Standard);
+        let resources = raw_dict_get(font, b"Resources")
+            .and_then(|r| raw_resolve_dict(&self.doc, r))
+            .unwrap_or(resources);
+        for byte in bytes {
+            let explicit = differences
+                .iter()
+                .rev()
+                .find(|(code, _)| code == byte)
+                .map(|(_, name)| name.as_bytes());
+            let name = explicit.unwrap_or_else(|| base.glyph_name(*byte).as_bytes());
+            if let Some(object) =
+                raw_dict_get(glyphs, name).or_else(|| raw_dict_get(glyphs, b".notdef"))
+            {
+                self.painted_stream(object, resources, seen, xobjects)?;
+            }
+        }
+        Ok(())
     }
 
     /// Decode one Image or Form XObject stream; other subtypes yield `None`.
@@ -445,6 +618,11 @@ impl RawBackend {
             })
             .map(|n| String::from_utf8_lossy(n).to_string());
 
+        #[cfg(test)]
+        if subtype == "Image" {
+            self.image_decodes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let decoded = match filter.as_deref() {
             Some("DCTDecode") | Some("JPXDecode") => None,
             _ => raw_stream::decompress(stream, |o| self.doc.resolve(o)).ok(),
@@ -1362,9 +1540,6 @@ fn raw_resolve_dict<'a>(doc: &'a RawDocument, obj: &'a RawPdfObject) -> Option<&
 /// Nesting bound for color spaces and functions that refer to others.
 const MAX_COLOR_DEPTH: usize = 8;
 
-/// Nesting bound for Form XObjects painted inside Form XObjects.
-const MAX_FORM_DEPTH: usize = 8;
-
 /// Resolve a number array, following references.
 fn raw_numbers(doc: &RawDocument, obj: &RawPdfObject) -> Option<Vec<f32>> {
     doc.resolve(obj)
@@ -1691,25 +1866,38 @@ mod tests {
     }
 
     fn backend_from_objects(objects: &[String]) -> RawBackend {
-        let mut pdf = "%PDF-1.4\n".to_string();
+        backend_from_bytes(
+            &objects
+                .iter()
+                .map(|s| s.as_bytes().to_vec())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn backend_from_bytes(objects: &[Vec<u8>]) -> RawBackend {
+        let mut pdf = b"%PDF-1.4\n".to_vec();
         let mut offsets = Vec::new();
         for (index, object) in objects.iter().enumerate() {
             offsets.push(pdf.len());
-            pdf.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, object));
+            pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            pdf.extend_from_slice(object);
+            pdf.extend_from_slice(b"\nendobj\n");
         }
         let xref = pdf.len();
-        pdf.push_str(&format!(
-            "xref\n0 {}\n0000000000 65535 f \n",
-            objects.len() + 1
-        ));
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
         for offset in offsets {
-            pdf.push_str(&format!("{offset:010} 00000 n \n"));
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
         }
-        pdf.push_str(&format!(
-            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
-            objects.len() + 1
-        ));
-        RawBackend::load_bytes(pdf.as_bytes()).unwrap()
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        RawBackend::load_bytes(&pdf).unwrap()
     }
 
     fn stream_object(dict: &str, data: &str) -> String {
@@ -1723,6 +1911,7 @@ mod tests {
         let mut names: Vec<String> = backend
             .page_xobjects(page)
             .unwrap()
+            .objects
             .into_iter()
             .map(|x| x.name)
             .collect();
@@ -1751,11 +1940,295 @@ mod tests {
             stream_object(image, "d"),
         ];
         let backend = backend_from_objects(&objects);
-        assert_eq!(xobject_names(&backend, (3, 0)), vec!["Im1"]);
+        assert_eq!(xobject_names(&backend, (3, 0)), vec!["object_6_0"]);
         assert_eq!(
             xobject_names(&backend, (4, 0)),
-            vec!["Fm1", "Fm1_Inner", "Im2"]
+            vec!["object_12_0", "object_7_0", "object_8_0"]
         );
+    }
+
+    const TEST_IMAGE: &str = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+
+    fn painted_pdf(resources: &str, content: &str, extra: Vec<String>) -> RawBackend {
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << {resources} >> /Contents 4 0 R >>"),
+            stream_object("", content),
+        ];
+        objects.extend(extra);
+        backend_from_objects(&objects)
+    }
+
+    fn painted_images(backend: &RawBackend) -> Vec<RawXObject> {
+        backend
+            .page_xobjects((3, 0))
+            .unwrap()
+            .objects
+            .into_iter()
+            .filter(|object| object.subtype == "Image")
+            .collect()
+    }
+
+    #[test]
+    fn painted_form_images_have_distinct_resource_identifiers() {
+        let backend = painted_pdf(
+            "/XObject << /Fm_Im 5 0 R /Fm 6 0 R >>",
+            "/Fm_Im Do /Fm Do",
+            vec![
+                stream_object(TEST_IMAGE, "a"),
+                stream_object(
+                    "/Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im 7 0 R >> >>",
+                    "/Im Do",
+                ),
+                stream_object(TEST_IMAGE, "b"),
+            ],
+        );
+        let images = painted_images(&backend);
+        assert_eq!(images.len(), 2);
+        assert_ne!(images[0].name, images[1].name);
+        assert_eq!(images[0].data, b"a");
+        assert_eq!(images[1].data, b"b");
+    }
+
+    #[test]
+    fn painted_tiling_patterns_reach_images_without_page_xobjects() {
+        for operator in ["scn", "SCN"] {
+            let backend = painted_pdf("/Pattern << /P 5 0 R /Unused 7 0 R >>",
+                &format!("/Pattern cs /P {operator} 0 0 10 10 re B"), vec![
+                stream_object("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1 /Resources << /XObject << /Im 6 0 R >> >>", "/Im Do"),
+                stream_object(TEST_IMAGE, "a"),
+                stream_object("/PatternType 1 /Resources << /XObject << /Im 8 0 R >> >>", "/Im Do"),
+                stream_object(TEST_IMAGE, "b"),
+            ]);
+            let images = painted_images(&backend);
+            assert_eq!(images.len(), 1, "{operator}");
+            assert_eq!(images[0].data, b"a");
+        }
+    }
+
+    #[test]
+    fn painted_soft_mask_forms_reach_images() {
+        let backend = painted_pdf(
+            "/ExtGState << /Mask 5 0 R >>",
+            "/Mask gs 0 0 10 10 re f",
+            vec![
+                "<< /SMask << /S /Luminosity /G 6 0 R >> >>".into(),
+                stream_object(
+                    "/Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im 7 0 R >> >>",
+                    "/Im Do",
+                ),
+                stream_object(TEST_IMAGE, "a"),
+            ],
+        );
+        assert_eq!(painted_images(&backend).len(), 1);
+    }
+
+    #[test]
+    fn painted_type3_glyphs_reach_images() {
+        let backend = painted_pdf("/Font << /F 5 0 R >>", "BT /F 12 Tf (A) Tj ET", vec![
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /Encoding << /Differences [65 /A /B] >> /FirstChar 65 /LastChar 66 /Widths [1 1] /CharProcs << /A 6 0 R /B 8 0 R >> /Resources << /XObject << /Im 7 0 R /Unused 9 0 R >> >> >>".into(),
+            stream_object("", "1 0 d0 /Im Do"),
+            stream_object(TEST_IMAGE, "a"),
+            stream_object("", "1 0 d0 /Unused Do"),
+            stream_object(TEST_IMAGE, "b"),
+        ]);
+        let images = painted_images(&backend);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data, b"a");
+    }
+
+    #[test]
+    fn inline_samples_do_not_hide_painted_xobjects() {
+        for (dict, samples) in [
+            ("/W 8 /H 1 /BPC 8 /CS /G", " EI (abc"),
+            (
+                "/Width 8 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray",
+                " EI (abc",
+            ),
+            ("/W 21 /H 1 /BPC 1 /CS /RGB", " EI (abc"),
+            ("/W 64 /H 1 /IM true", " EI (abc"),
+            ("/W 8 /H 1 /BPC 8 /CS /G /F /AHx", "2045492028616263>"),
+        ] {
+            let backend = painted_pdf(
+                "/XObject << /Im 5 0 R >>",
+                &format!("BI {dict} ID {samples} EI /Im Do"),
+                vec![stream_object(TEST_IMAGE, "z")],
+            );
+            assert_eq!(painted_images(&backend).len(), 1, "{dict}");
+        }
+    }
+
+    #[test]
+    fn painted_forms_have_no_fixed_nesting_limit_and_stop_cycles() {
+        let depth = 96;
+        let mut extra = Vec::new();
+        for n in 5..5 + depth {
+            extra.push(stream_object(&format!("/Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Next {} 0 R /Cycle 5 0 R >> >>", n + 1), "/Next Do /Cycle Do"));
+        }
+        extra.push(stream_object(TEST_IMAGE, "z"));
+        let backend = painted_pdf("/XObject << /First 5 0 R >>", "/First Do", extra);
+        assert_eq!(painted_images(&backend).len(), 1);
+    }
+
+    #[test]
+    fn painted_type3_base_encoding_uses_glyph_names_not_unicode_aliases() {
+        let backend = painted_pdf("/Font << /F 5 0 R >>", "BT /F 12 Tf (A) Tj ET", vec![
+            "<< /Type /Font /Subtype /Type3 /Encoding /StandardEncoding /CharProcs << /A 6 0 R /uni0041 8 0 R >> /Resources << /XObject << /Im 7 0 R /Alias 9 0 R >> >> >>".into(),
+            stream_object("", "1 0 d0 /Im Do"),
+            stream_object(TEST_IMAGE, "a"),
+            stream_object("", "1 0 d0 /Alias Do"),
+            stream_object(TEST_IMAGE, "b"),
+        ]);
+        // Resource dictionaries use randomized hash order.
+        for _ in 0..32 {
+            let images = painted_images(&backend);
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].data, b"a");
+        }
+    }
+
+    #[test]
+    fn painted_annotation_appearance_reaches_images() {
+        let objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Annots [4 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Stamp /Rect [0 0 10 10] /AP << /N 5 0 R >> >>".into(),
+            stream_object(
+                "/Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im 6 0 R >> >>",
+                "/Im Do",
+            ),
+            stream_object(TEST_IMAGE, "z"),
+        ];
+        assert_eq!(painted_images(&backend_from_objects(&objects)).len(), 1);
+    }
+
+    #[test]
+    fn inline_named_colors_keep_the_following_image_and_text() {
+        let backend = painted_pdf(
+            "/ColorSpace << /Custom /DeviceGray >> /XObject << /Im 5 0 R >>",
+            "BI /W 8 /H 1 /BPC 8 /CS /Custom ID  EI (abc EI /Im Do BT (visible) Tj ET",
+            vec![stream_object(TEST_IMAGE, "z")],
+        );
+        assert_eq!(painted_images(&backend).len(), 1);
+        let ops = backend
+            .decode_page_content((3, 0), &backend.page_content((3, 0)).unwrap())
+            .unwrap();
+        assert!(ops.iter().any(|op| op.operator == "Tj"));
+    }
+
+    #[test]
+    fn repeated_image_placements_require_composite_rendering_without_redecoding() {
+        let backend = painted_pdf(
+            "/XObject << /I 5 0 R /J 5 0 R >>",
+            "q /I Do Q q 1 0 0 1 4 0 cm /J Do Q",
+            vec![stream_object(TEST_IMAGE, "z")],
+        );
+        let page = super::super::pdf_parser::parse_single_page(
+            &backend, 1, &super::super::ParseOptions::new().with_resources(true),
+        ).unwrap();
+        assert_eq!(page.image_resource_count, 2);
+        assert_eq!(page.extracted_resources.len(), 1);
+        assert_eq!(backend.image_decodes.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn shared_scan_resources_decode_once_per_painted_image_per_page() {
+        use std::sync::atomic::Ordering;
+        let pages = 8;
+        let images = 32;
+        let resources = 3 + pages;
+        let first_image = resources + 1;
+        let first_content = first_image + images;
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            format!(
+                "<< /Type /Pages /Kids [{}] /Count {pages} >>",
+                (3..resources)
+                    .map(|n| format!("{n} 0 R"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        ];
+        for page in 0..pages {
+            objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources {resources} 0 R /Contents {} 0 R >>", first_content + page));
+        }
+        objects.push(format!(
+            "<< /XObject << {} >> >>",
+            (0..images)
+                .map(|n| format!("/Im{n} {} 0 R", first_image + n))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+        for _ in 0..images {
+            objects.push(stream_object(TEST_IMAGE, "z"));
+        }
+        for page in 0..pages {
+            objects.push(stream_object("", &format!("/Im{page} Do /Im{page} Do")));
+        }
+        let backend = backend_from_objects(&objects);
+        for page in 0..pages {
+            let before = backend.image_decodes.load(Ordering::Relaxed);
+            let extracted = backend.page_xobjects(((3 + page) as u32, 0)).unwrap();
+            assert_eq!(extracted.objects.len(), 1);
+            assert_eq!(extracted.paint_count, 2);
+            assert_eq!(extracted.objects[0].data, b"z");
+            assert_eq!(backend.image_decodes.load(Ordering::Relaxed) - before, 1);
+        }
+    }
+
+    #[test]
+    fn filtered_inline_data_keeps_following_painted_xobjects() {
+        use std::io::Write;
+        let mut flate = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
+        flate.write_all(b" EI (abc").unwrap();
+        let flate = flate.finish().unwrap();
+        for (filter, samples) in [
+            ("/Fl", flate.clone()),
+            (
+                "[/AHx /Fl]",
+                [
+                    flate
+                        .iter()
+                        .flat_map(|byte| format!("{byte:02x}").into_bytes())
+                        .collect::<Vec<_>>(),
+                    b">".to_vec(),
+                ]
+                .concat(),
+            ),
+            ("/A85", b"zz~>".to_vec()),
+            ("/RL", [vec![7], b" EI (abc".to_vec(), vec![128]].concat()),
+            // clear, one sample, EOD, padded to a byte boundary
+            ("/LZW", vec![128, 0, 32, 32]),
+            // One all-white Group 4 row, followed by EOFB.
+            (
+                "/CCF /DP << /K -1 /Columns 8 /Rows 1 >>",
+                vec![0x80, 0x08, 0x00, 0x80],
+            ),
+        ] {
+            let mut content = format!("BI /W 8 /H 1 /BPC 8 /CS /G /F {filter} ID ").into_bytes();
+            content.extend_from_slice(&samples);
+            content.extend_from_slice(b" EI /Im Do");
+            let stream = [
+                format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(),
+                content,
+                b"\nendstream".to_vec(),
+            ]
+            .concat();
+            let objects = vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+                stream,
+                stream_object(TEST_IMAGE, "z").into_bytes(),
+            ];
+            assert_eq!(
+                painted_images(&backend_from_bytes(&objects)).len(),
+                1,
+                "{filter}"
+            );
+        }
     }
 
     #[test]

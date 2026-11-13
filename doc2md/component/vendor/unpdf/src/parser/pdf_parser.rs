@@ -210,15 +210,10 @@ pub(crate) fn parse_single_page(
     if options.extract_resources && options.extract_mode != ExtractMode::StructureOnly {
         let pages = backend.pages();
         if let Some(page_id) = pages.get(&page_num) {
-            let content = backend.page_content(*page_id)?;
-            page.image_resource_count = backend
-                .decode_content(&content)?
-                .iter()
-                .filter(|op| op.operator == "BI")
-                .count() as u32;
-            if let Ok(xobjects) = backend.page_xobjects(*page_id) {
-                page.image_resource_count += xobjects.len() as u32;
-                for xobj in xobjects {
+            {
+                let xobjects = backend.page_xobjects(*page_id)?;
+                page.image_resource_count = xobjects.paint_count;
+                for xobj in xobjects.objects {
                     let base_id = format!("page{}_{}", page_num, xobj.name);
                     if let Some(resource) = convert_xobject_pub(xobj) {
                         page.extracted_resources.push((base_id.clone(), resource));
@@ -571,9 +566,9 @@ mod tests {
             fn outline(&self) -> Result<Vec<RawOutlineItem>> {
                 Ok(vec![])
             }
-            fn page_xobjects(&self, _: PageId) -> Result<Vec<RawXObject>> {
+            fn page_xobjects(&self, _: PageId) -> Result<super::super::backend::RawPageXObjects> {
                 self.0.fetch_add(1, Ordering::Relaxed);
-                Ok([
+                Ok(super::super::backend::RawPageXObjects { paint_count: 4, objects: [
                     ("raw", "Image", None, 4),
                     ("photo", "Image", Some("DCTDecode"), 200),
                     ("small", "Image", Some("DCTDecode"), 4),
@@ -591,7 +586,7 @@ mod tests {
                     color_space: Some(("DeviceGray".into(), Some(crate::model::ColorSpace::Gray))),
                     samples: None,
                 })
-                .collect())
+                .collect() })
             }
         }
         for parallel in [false, true] {
