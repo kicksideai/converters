@@ -94,8 +94,9 @@ pub(crate) fn parse_content_stream_with_colors(
                 }
                 "BI" => {
                     // Consume image data using its sample layout or filter boundary.
-                    i = skip_inline_image(data, i, &color_components)?;
-                    // Emit BI as an operator with no operands (stack should be empty)
+                    let (next, dict) = skip_inline_image(data, i, &color_components)?;
+                    i = next;
+                    operand_stack.push(content_value(PdfObject::Dict(dict)));
                     ops.push(ContentOp {
                         operator: "BI".to_string(),
                         operands: std::mem::take(&mut operand_stack),
@@ -430,7 +431,7 @@ fn skip_inline_image(
     data: &[u8],
     start: usize,
     colors: &impl Fn(&PdfObject) -> Option<usize>,
-) -> Result<usize> {
+) -> Result<(usize, PdfDict)> {
     let mut dict = PdfDict::new();
     let mut i = start;
     loop {
@@ -601,7 +602,21 @@ fn skip_inline_image(
     if data.get(i..i + 2) != Some(b"EI") || data.get(i + 2).is_some_and(|b| !is_delimiter(*b)) {
         return Err(Error::PdfParse("missing inline image EI delimiter".into()));
     }
-    Ok(i + 2)
+    Ok((i + 2, dict))
+}
+
+fn content_value(value: PdfObject) -> PdfValue {
+    match value {
+        PdfObject::Bool(value) => PdfValue::Bool(value),
+        PdfObject::Integer(value) => PdfValue::Integer(value),
+        PdfObject::Real(value) => PdfValue::Real(value as f32),
+        PdfObject::Name(value) => PdfValue::Name(value),
+        PdfObject::Str(value) => PdfValue::Str(value),
+        PdfObject::Array(values) => PdfValue::Array(values.into_iter().map(content_value).collect()),
+        PdfObject::Dict(values) => PdfValue::Dictionary(values.into_iter()
+            .map(|(key, value)| (key, content_value(value))).collect()),
+        _ => PdfValue::Other,
+    }
 }
 
 /// LZW code widths depend on dictionary size, independently of pixel values.
