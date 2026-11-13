@@ -146,6 +146,7 @@ use super::raw::content as raw_content;
 use super::raw::stream as raw_stream;
 use super::raw::tokenizer::{
     dict_get as raw_dict_get, PdfDict as RawPdfDict, PdfObject as RawPdfObject,
+    PdfStream as RawPdfStream,
 };
 use super::raw::RawDocument;
 
@@ -333,130 +334,179 @@ impl PdfBackend for RawBackend {
             .get_dict(page)
             .map_err(|e| Error::PdfParse(e.to_string()))?;
 
-        let resources = match raw_dict_get(page_dict, b"Resources") {
-            Some(r) => r,
-            None => return Ok(xobjects),
-        };
-
-        let res_dict = raw_resolve_dict(&self.doc, resources);
-        let res_dict = match res_dict {
+        let res_dict = match raw_dict_get(page_dict, b"Resources")
+            .and_then(|r| raw_resolve_dict(&self.doc, r))
+        {
             Some(d) => d,
             None => return Ok(xobjects),
         };
 
-        let xobj_entry = match raw_dict_get(res_dict, b"XObject") {
-            Some(x) => x,
-            None => return Ok(xobjects),
+        let ops = match self.page_content(page) {
+            Ok(content) => self.decode_content(&content)?,
+            Err(_) => return Ok(xobjects),
         };
-
-        let xobj_dict = raw_resolve_dict(&self.doc, xobj_entry);
-        let xobj_dict = match xobj_dict {
-            Some(d) => d,
-            None => return Ok(xobjects),
-        };
-
-        for (name, obj) in xobj_dict {
-            if let Some((n, g)) = obj.as_reference() {
-                if let Some(raw_obj) = self.doc.get_object((n, g)) {
-                    let resolved = self.doc.resolve(raw_obj);
-                    if let Some(stream) = resolved.as_stream() {
-                        let dict = &stream.dict;
-
-                        let subtype = raw_dict_get(dict, b"Subtype")
-                            .and_then(|s| s.as_name())
-                            .map(|n| String::from_utf8_lossy(n).to_string())
-                            .unwrap_or_default();
-
-                        if subtype != "Image" && subtype != "Form" {
-                            continue;
-                        }
-
-                        let filter = raw_dict_get(dict, b"Filter")
-                            .and_then(|f| match self.doc.resolve(f) {
-                                RawPdfObject::Array(filters) if filters.len() == 1 => {
-                                    self.doc.resolve(&filters[0]).as_name()
-                                }
-                                filter => filter.as_name(),
-                            })
-                            .map(|n| String::from_utf8_lossy(n).to_string());
-
-                        let decoded = match filter.as_deref() {
-                            Some("DCTDecode") | Some("JPXDecode") => None,
-                            _ => raw_stream::decompress(stream, |o| self.doc.resolve(o)).ok(),
-                        };
-                        let samples_decoded = decoded.is_some();
-                        let data = decoded.unwrap_or_else(|| stream.raw_data.clone());
-
-                        let width = raw_dict_get(dict, b"Width")
-                            .and_then(|w| w.as_i64())
-                            .map(|w| w as u32);
-                        let height = raw_dict_get(dict, b"Height")
-                            .and_then(|h| h.as_i64())
-                            .map(|h| h as u32);
-                        let image_mask = matches!(
-                            raw_dict_get(dict, b"ImageMask").map(|m| self.doc.resolve(m)),
-                            Some(RawPdfObject::Bool(true))
-                        );
-                        let bits = if image_mask {
-                            Some(1)
-                        } else {
-                            raw_dict_get(dict, b"BitsPerComponent")
-                                .and_then(|b| self.doc.resolve(b).as_i64())
-                                .map(|b| b as u8)
-                        };
-
-                        let color_space =
-                            raw_dict_get(dict, b"ColorSpace").and_then(|cs| {
-                                match self.doc.resolve(cs) {
-                                    RawPdfObject::Name(n) => {
-                                        Some(String::from_utf8_lossy(n).to_string())
-                                    }
-                                    RawPdfObject::Array(arr) => arr
-                                        .first()
-                                        .and_then(|o| o.as_name())
-                                        .map(|n| String::from_utf8_lossy(n).to_string()),
-                                    _ => None,
-                                }
-                            });
-
-                        let resolved_color_space = if image_mask {
-                            Some(ColorSpace::Gray)
-                        } else {
-                            let named = raw_dict_get(res_dict, b"ColorSpace")
-                                .and_then(|cs| raw_resolve_dict(&self.doc, cs));
-                            raw_dict_get(dict, b"ColorSpace")
-                                .and_then(|cs| resolve_color_space(&self.doc, cs, named, 0))
-                        };
-                        let samples = resolved_color_space
-                            .clone()
-                            .filter(|_| subtype == "Image" && samples_decoded)
-                            .map(|color_space| SampleLayout {
-                                color_space,
-                                decode: raw_dict_get(dict, b"Decode")
-                                    .and_then(|d| raw_numbers(&self.doc, d)),
-                            });
-
-                        xobjects.push(RawXObject {
-                            name: String::from_utf8_lossy(name).to_string(),
-                            subtype,
-                            data,
-                            filter,
-                            width,
-                            height,
-                            bits_per_component: bits,
-                            color_space: color_space.map(|name| (name, resolved_color_space)),
-                            samples,
-                        });
-                    }
-                }
-            }
-        }
-
+        let mut seen = std::collections::HashSet::new();
+        self.painted_xobjects(&ops, res_dict, "", 0, &mut seen, &mut xobjects);
         Ok(xobjects)
     }
 
     fn acroform_fields(&self) -> Vec<FormField> {
         self.extract_acroform_fields()
+    }
+}
+
+impl RawBackend {
+    /// Collect the XObjects a content stream paints with `Do`, in paint order,
+    /// descending into painted Form XObjects. Names inside a form are prefixed
+    /// with the form's name so they stay distinct from page-level names.
+    fn painted_xobjects(
+        &self,
+        ops: &[ContentOp],
+        res_dict: &RawPdfDict,
+        prefix: &str,
+        depth: usize,
+        seen: &mut std::collections::HashSet<(u32, u16)>,
+        xobjects: &mut Vec<RawXObject>,
+    ) {
+        let xobj_dict =
+            match raw_dict_get(res_dict, b"XObject").and_then(|x| raw_resolve_dict(&self.doc, x)) {
+                Some(d) => d,
+                None => return,
+            };
+        for op in ops.iter().filter(|op| op.operator == "Do") {
+            let Some(PdfValue::Name(name)) = op.operands.last() else {
+                continue;
+            };
+            let Some(reference) = raw_dict_get(xobj_dict, name).and_then(|o| o.as_reference())
+            else {
+                continue;
+            };
+            if !seen.insert(reference) {
+                continue;
+            }
+            let Some(raw_obj) = self.doc.get_object(reference) else {
+                continue;
+            };
+            let Some(stream) = self.doc.resolve(raw_obj).as_stream() else {
+                continue;
+            };
+            let name = format!("{prefix}{}", String::from_utf8_lossy(name));
+            let Some(xobject) = self.raw_xobject(name, stream, res_dict) else {
+                continue;
+            };
+            let form = xobject.subtype == "Form";
+            let form_name = format!("{}_", xobject.name);
+            xobjects.push(xobject);
+            if form && depth < MAX_FORM_DEPTH {
+                let form_res = raw_dict_get(&stream.dict, b"Resources")
+                    .and_then(|r| raw_resolve_dict(&self.doc, r))
+                    .unwrap_or(res_dict);
+                let form_ops = raw_stream::decompress(stream, |o| self.doc.resolve(o))
+                    .ok()
+                    .and_then(|content| self.decode_content(&content).ok());
+                if let Some(form_ops) = form_ops {
+                    self.painted_xobjects(
+                        &form_ops,
+                        form_res,
+                        &form_name,
+                        depth + 1,
+                        seen,
+                        xobjects,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Decode one Image or Form XObject stream; other subtypes yield `None`.
+    fn raw_xobject(
+        &self,
+        name: String,
+        stream: &RawPdfStream,
+        res_dict: &RawPdfDict,
+    ) -> Option<RawXObject> {
+        let dict = &stream.dict;
+
+        let subtype = raw_dict_get(dict, b"Subtype")
+            .and_then(|s| s.as_name())
+            .map(|n| String::from_utf8_lossy(n).to_string())
+            .unwrap_or_default();
+
+        if subtype != "Image" && subtype != "Form" {
+            return None;
+        }
+
+        let filter = raw_dict_get(dict, b"Filter")
+            .and_then(|f| match self.doc.resolve(f) {
+                RawPdfObject::Array(filters) if filters.len() == 1 => {
+                    self.doc.resolve(&filters[0]).as_name()
+                }
+                filter => filter.as_name(),
+            })
+            .map(|n| String::from_utf8_lossy(n).to_string());
+
+        let decoded = match filter.as_deref() {
+            Some("DCTDecode") | Some("JPXDecode") => None,
+            _ => raw_stream::decompress(stream, |o| self.doc.resolve(o)).ok(),
+        };
+        let samples_decoded = decoded.is_some();
+        let data = decoded.unwrap_or_else(|| stream.raw_data.clone());
+
+        let width = raw_dict_get(dict, b"Width")
+            .and_then(|w| w.as_i64())
+            .map(|w| w as u32);
+        let height = raw_dict_get(dict, b"Height")
+            .and_then(|h| h.as_i64())
+            .map(|h| h as u32);
+        let image_mask = matches!(
+            raw_dict_get(dict, b"ImageMask").map(|m| self.doc.resolve(m)),
+            Some(RawPdfObject::Bool(true))
+        );
+        let bits = if image_mask {
+            Some(1)
+        } else {
+            raw_dict_get(dict, b"BitsPerComponent")
+                .and_then(|b| self.doc.resolve(b).as_i64())
+                .map(|b| b as u8)
+        };
+
+        let color_space =
+            raw_dict_get(dict, b"ColorSpace").and_then(|cs| match self.doc.resolve(cs) {
+                RawPdfObject::Name(n) => Some(String::from_utf8_lossy(n).to_string()),
+                RawPdfObject::Array(arr) => arr
+                    .first()
+                    .and_then(|o| o.as_name())
+                    .map(|n| String::from_utf8_lossy(n).to_string()),
+                _ => None,
+            });
+
+        let resolved_color_space = if image_mask {
+            Some(ColorSpace::Gray)
+        } else {
+            let named = raw_dict_get(res_dict, b"ColorSpace")
+                .and_then(|cs| raw_resolve_dict(&self.doc, cs));
+            raw_dict_get(dict, b"ColorSpace")
+                .and_then(|cs| resolve_color_space(&self.doc, cs, named, 0))
+        };
+        let samples = resolved_color_space
+            .clone()
+            .filter(|_| subtype == "Image" && samples_decoded)
+            .map(|color_space| SampleLayout {
+                color_space,
+                decode: raw_dict_get(dict, b"Decode").and_then(|d| raw_numbers(&self.doc, d)),
+            });
+
+        Some(RawXObject {
+            name,
+            subtype,
+            data,
+            filter,
+            width,
+            height,
+            bits_per_component: bits,
+            color_space: color_space.map(|name| (name, resolved_color_space)),
+            samples,
+        })
     }
 }
 
@@ -1312,6 +1362,9 @@ fn raw_resolve_dict<'a>(doc: &'a RawDocument, obj: &'a RawPdfObject) -> Option<&
 /// Nesting bound for color spaces and functions that refer to others.
 const MAX_COLOR_DEPTH: usize = 8;
 
+/// Nesting bound for Form XObjects painted inside Form XObjects.
+const MAX_FORM_DEPTH: usize = 8;
+
 /// Resolve a number array, following references.
 fn raw_numbers(doc: &RawDocument, obj: &RawPdfObject) -> Option<Vec<f32>> {
     doc.resolve(obj)
@@ -1634,6 +1687,10 @@ mod tests {
             font.to_string(),
         ];
         objects.extend_from_slice(extra_objects);
+        backend_from_objects(&objects)
+    }
+
+    fn backend_from_objects(objects: &[String]) -> RawBackend {
         let mut pdf = "%PDF-1.4\n".to_string();
         let mut offsets = Vec::new();
         for (index, object) in objects.iter().enumerate() {
@@ -1653,6 +1710,52 @@ mod tests {
             objects.len() + 1
         ));
         RawBackend::load_bytes(pdf.as_bytes()).unwrap()
+    }
+
+    fn stream_object(dict: &str, data: &str) -> String {
+        format!(
+            "<< {dict} /Length {} >>\nstream\n{data}\nendstream",
+            data.len()
+        )
+    }
+
+    fn xobject_names(backend: &RawBackend, page: PageId) -> Vec<String> {
+        let mut names: Vec<String> = backend
+            .page_xobjects(page)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.name)
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn page_xobjects_are_the_ones_its_content_paints() {
+        let image = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+        let objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 5 0 R /Contents 9 0 R >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 5 0 R /Contents 10 0 R >>".to_string(),
+            "<< /XObject << /Im1 6 0 R /Im2 7 0 R /Fm1 8 0 R /Unused 11 0 R >> >>".to_string(),
+            stream_object(image, "a"),
+            stream_object(image, "b"),
+            stream_object(
+                "/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Inner 12 0 R >> >>",
+                "q /Inner Do Q",
+            ),
+            stream_object("", "q 612 0 0 792 0 0 cm /Im1 Do Q"),
+            stream_object("", "q /Im2 Do Q /Fm1 Do /Im2 Do"),
+            stream_object(image, "c"),
+            stream_object(image, "d"),
+        ];
+        let backend = backend_from_objects(&objects);
+        assert_eq!(xobject_names(&backend, (3, 0)), vec!["Im1"]);
+        assert_eq!(
+            xobject_names(&backend, (4, 0)),
+            vec!["Fm1", "Fm1_Inner", "Im2"]
+        );
     }
 
     #[test]

@@ -136,4 +136,19 @@ cover reserved, escaped, indirect, mixed, and real names and deserialization
 without names. Component tests cover omitted image artifacts, retained page
 counts, encoded streams, and unchanged pixels for painting colorants.
 
+### 7. Painted Page XObjects (`src/parser/backend.rs`)
+
+`RawBackend::page_xobjects` returns the XObjects the page content stream paints
+with `Do`, in paint order, and descends into painted Form XObjects (their own
+`/Resources`, else the enclosing ones; at most eight levels). Upstream returns
+every entry of the page's `/Resources /XObject` dictionary. Pages that share one
+resource dictionary listing many scans therefore decoded every scan once per
+page, so decoded samples grew with pages times listed scans and exceeded the
+wasm32 4 GiB address space on long scanned documents. Each painted object is
+decoded once per page.
+Images inside a form are named `<form>_<name>` so they stay distinct from
+page-level names. Page image-resource counts consequently count painted
+XObjects. `page_xobjects_are_the_ones_its_content_paints` covers shared
+resources, unpainted entries, repeated paints and a nested form.
+
 No other unpdf sources are modified.
