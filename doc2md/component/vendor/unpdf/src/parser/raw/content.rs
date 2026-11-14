@@ -1,10 +1,18 @@
 //! PDF content stream parser.
 
-use crate::error::Result;
+use super::tokenizer::{parse_object, PdfDict, PdfObject};
+use crate::error::{Error, Result};
 use crate::parser::backend::{ContentOp, PdfValue};
 
 /// Parse a content stream into a sequence of operations.
 pub fn parse_content_stream(data: &[u8]) -> Result<Vec<ContentOp>> {
+    parse_content_stream_with_colors(data, |_| None)
+}
+
+pub(crate) fn parse_content_stream_with_colors(
+    data: &[u8],
+    color_components: impl Fn(&PdfObject) -> Option<usize>,
+) -> Result<Vec<ContentOp>> {
     let mut ops = Vec::new();
     let mut operand_stack: Vec<PdfValue> = Vec::new();
     let len = data.len();
@@ -85,9 +93,10 @@ pub fn parse_content_stream(data: &[u8]) -> Result<Vec<ContentOp>> {
                     operand_stack.push(PdfValue::Other);
                 }
                 "BI" => {
-                    // Inline image: skip until EI
-                    i = skip_inline_image(data, i);
-                    // Emit BI as an operator with no operands (stack should be empty)
+                    // Consume image data using its sample layout or filter boundary.
+                    let (next, dict) = skip_inline_image(data, i, &color_components)?;
+                    i = next;
+                    operand_stack.push(content_value(PdfObject::Dict(dict)));
                     ops.push(ContentOp {
                         operator: "BI".to_string(),
                         operands: std::mem::take(&mut operand_stack),
@@ -416,43 +425,258 @@ fn parse_array(data: &[u8], start: usize) -> (PdfValue, usize) {
     (PdfValue::Array(elements), i)
 }
 
-/// Skip an inline image block. Called right after consuming `BI`.
-/// We need to find `ID` (image data marker), then scan for `EI`.
-fn skip_inline_image(data: &[u8], start: usize) -> usize {
-    let len = data.len();
+/// Parse the inline dictionary before consuming image data. Sample bytes can
+/// contain any content-stream token, including whitespace-delimited `EI`.
+fn skip_inline_image(
+    data: &[u8],
+    start: usize,
+    colors: &impl Fn(&PdfObject) -> Option<usize>,
+) -> Result<(usize, PdfDict)> {
+    let mut dict = PdfDict::new();
     let mut i = start;
-
-    // Find `ID` marker (must be preceded by whitespace)
-    while i + 1 < len {
-        if data[i] == b'I' && data[i + 1] == b'D' {
-            // Check that ID is preceded by whitespace (or start)
-            let preceded = i == 0 || is_whitespace(data[i - 1]);
-            if preceded {
-                i += 2; // skip "ID"
-                        // Skip the single whitespace after ID
-                if i < len && is_whitespace(data[i]) {
-                    i += 1;
+    loop {
+        while i < data.len() && is_whitespace(data[i]) {
+            i += 1;
+        }
+        if data.get(i) == Some(&b'%') {
+            while i < data.len() && !matches!(data[i], b'\r' | b'\n') {
+                i += 1;
+            }
+            continue;
+        }
+        if data.get(i..i + 2) == Some(b"ID") && data.get(i + 2).is_some_and(|b| is_whitespace(*b)) {
+            i += 3;
+            if data.get(i - 1..i + 1) == Some(b"\r\n") {
+                i += 1;
+            }
+            break;
+        }
+        let (key, next) = parse_object(data, i)?;
+        let (value, next) = parse_object(data, next)?;
+        let PdfObject::Name(key) = key else {
+            return Err(Error::PdfParse("invalid inline image dictionary".into()));
+        };
+        dict.insert(key, value);
+        i = next;
+    }
+    let get = |short: &[u8], full: &[u8]| dict.get(short).or_else(|| dict.get(full));
+    let filter = get(b"F", b"Filter")
+        .and_then(|f| match f {
+            PdfObject::Array(filters) => filters.first(),
+            value => Some(value),
+        })
+        .and_then(PdfObject::as_name);
+    let samples = &data[i..];
+    let parms = get(b"DP", b"DecodeParms")
+        .and_then(|p| match p {
+            PdfObject::Array(values) => values.first(),
+            value => Some(value),
+        })
+        .and_then(PdfObject::as_dict);
+    let size = get(b"Length", b"Length")
+        .and_then(PdfObject::as_i64)
+        .and_then(|n| usize::try_from(n).ok());
+    let size = if let Some(size) = size {
+        Some(size)
+    } else {
+        match filter {
+            None => {
+                let number = |short, full| {
+                    get(short, full)
+                        .and_then(PdfObject::as_i64)
+                        .and_then(|n| usize::try_from(n).ok())
+                };
+                let mask = matches!(get(b"IM", b"ImageMask"), Some(PdfObject::Bool(true)));
+                let components = if mask {
+                    Some(1usize)
+                } else {
+                    match get(b"CS", b"ColorSpace") {
+                        Some(PdfObject::Name(name)) => match name.as_slice() {
+                            b"G" | b"DeviceGray" => Some(1),
+                            b"RGB" | b"DeviceRGB" => Some(3),
+                            b"CMYK" | b"DeviceCMYK" => Some(4),
+                            _ => colors(get(b"CS", b"ColorSpace").unwrap()),
+                        },
+                        Some(PdfObject::Array(array))
+                            if array
+                                .first()
+                                .and_then(PdfObject::as_name)
+                                .is_some_and(|n| n == b"I" || n == b"Indexed") =>
+                        {
+                            Some(1)
+                        }
+                        value => value.and_then(colors),
+                    }
+                };
+                let bits = if mask {
+                    Some(1)
+                } else {
+                    number(b"BPC", b"BitsPerComponent")
+                };
+                number(b"W", b"Width")
+                    .zip(number(b"H", b"Height"))
+                    .zip(bits)
+                    .zip(components)
+                    .and_then(|(((w, h), bpc), c)| {
+                        w.checked_mul(c)?
+                            .checked_mul(bpc)?
+                            .checked_add(7)?
+                            .checked_div(8)?
+                            .checked_mul(h)
+                    })
+            }
+            Some(b"AHx" | b"ASCIIHexDecode") => {
+                samples.iter().position(|b| *b == b'>').map(|n| n + 1)
+            }
+            Some(b"A85" | b"ASCII85Decode") => {
+                samples.windows(2).position(|b| b == b"~>").map(|n| n + 2)
+            }
+            Some(b"Fl" | b"FlateDecode") => {
+                let mut decoder = flate2::bufread::ZlibDecoder::new(samples);
+                std::io::copy(&mut decoder, &mut std::io::sink())
+                    .map_err(|e| Error::PdfParse(format!("invalid inline Flate image: {e}")))?;
+                Some(decoder.total_in() as usize)
+            }
+            Some(b"RL" | b"RunLengthDecode") => {
+                let mut n = 0;
+                loop {
+                    let Some(&length) = samples.get(n) else {
+                        break None;
+                    };
+                    n += 1;
+                    match length {
+                        128 => break Some(n),
+                        0..=127 => n += usize::from(length) + 1,
+                        _ => n += 1,
+                    }
                 }
-                break;
+            }
+            Some(b"DCT" | b"DCTDecode") => jpeg_length(samples),
+            Some(b"LZW" | b"LZWDecode") => {
+                let early = parms
+                    .and_then(|d| d.get(b"EarlyChange".as_slice()))
+                    .and_then(PdfObject::as_i64)
+                    .unwrap_or(1);
+                lzw_length(samples, early as usize)
+            }
+            Some(b"CCF" | b"CCITTFaxDecode") => {
+                use hayro_ccitt::{DecodeSettings, Decoder, DecoderContext, EncodingMode};
+                struct Rows;
+                impl Decoder for Rows {
+                    fn push_row(&mut self, _: &[u32]) {}
+                }
+                let param = |key: &[u8]| parms.and_then(|p| p.get(key));
+                let number =
+                    |key, default| param(key).and_then(PdfObject::as_i64).unwrap_or(default);
+                let flag = |key, default| match param(key) {
+                    Some(PdfObject::Bool(b)) => *b,
+                    _ => default,
+                };
+                let settings = DecodeSettings {
+                    columns: number(b"Columns", 1728) as u32,
+                    rows: number(b"Rows", 0) as u32,
+                    end_of_block: flag(b"EndOfBlock", true),
+                    end_of_line: flag(b"EndOfLine", false),
+                    rows_are_byte_aligned: flag(b"EncodedByteAlign", false),
+                    encoding: match number(b"K", 0) {
+                        n if n < 0 => EncodingMode::Group4,
+                        0 => EncodingMode::Group3_1D,
+                        _ => EncodingMode::Group3_2D,
+                    },
+                    strict: true,
+                };
+                Some(hayro_ccitt::decode(samples, &mut Rows, &mut DecoderContext::new(settings))
+                    .map_err(|e| Error::PdfParse(format!("invalid inline CCITT image: {e:?}")))?)
+            }
+            _ => None,
+        }
+    }
+    .ok_or_else(|| Error::PdfParse("cannot determine inline image data length".into()))?;
+    i = i
+        .checked_add(size)
+        .filter(|end| *end <= data.len())
+        .ok_or_else(|| Error::PdfParse("truncated inline image data".into()))?;
+    while i < data.len() && is_whitespace(data[i]) {
+        i += 1;
+    }
+    if data.get(i..i + 2) != Some(b"EI") || data.get(i + 2).is_some_and(|b| !is_delimiter(*b)) {
+        return Err(Error::PdfParse("missing inline image EI delimiter".into()));
+    }
+    Ok((i + 2, dict))
+}
+
+fn content_value(value: PdfObject) -> PdfValue {
+    match value {
+        PdfObject::Bool(value) => PdfValue::Bool(value),
+        PdfObject::Integer(value) => PdfValue::Integer(value),
+        PdfObject::Real(value) => PdfValue::Real(value as f32),
+        PdfObject::Name(value) => PdfValue::Name(value),
+        PdfObject::Str(value) => PdfValue::Str(value),
+        PdfObject::Array(values) => PdfValue::Array(values.into_iter().map(content_value).collect()),
+        PdfObject::Dict(values) => PdfValue::Dictionary(values.into_iter()
+            .map(|(key, value)| (key, content_value(value))).collect()),
+        _ => PdfValue::Other,
+    }
+}
+
+/// LZW code widths depend on dictionary size, independently of pixel values.
+fn lzw_length(data: &[u8], early_change: usize) -> Option<usize> {
+    let (mut bit, mut width, mut next, mut previous) = (0, 9, 258, false);
+    loop {
+        let mut code = 0;
+        for _ in 0..width {
+            code = (code << 1) | usize::from((data.get(bit / 8)? >> (7 - bit % 8)) & 1);
+            bit += 1;
+        }
+        match code {
+            256 => {
+                width = 9;
+                next = 258;
+                previous = false;
+            }
+            257 => return Some((bit + 7) / 8),
+            _ => {
+                if previous && next < 4096 {
+                    next += 1;
+                    if next + early_change == 1 << width && width < 12 {
+                        width += 1;
+                    }
+                }
+                previous = true;
             }
         }
-        i += 1;
     }
+}
 
-    // Now scan for `EI` preceded by whitespace and followed by whitespace/EOF
-    while i + 1 < len {
-        if data[i] == b'E'
-            && data[i + 1] == b'I'
-            && (i == 0 || is_whitespace(data[i - 1]))
-            && (i + 2 >= len || is_whitespace(data[i + 2]) || is_delimiter(data[i + 2]))
-        {
-            return i + 2; // past "EI"
+/// JPEG segments carry their own lengths; entropy data escapes literal FF bytes.
+fn jpeg_length(data: &[u8]) -> Option<usize> {
+    if !data.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut i = 2;
+    while i < data.len() {
+        if data[i] != 0xff {
+            i += 1;
+            continue;
         }
+        while data.get(i) == Some(&0xff) {
+            i += 1;
+        }
+        let marker = *data.get(i)?;
         i += 1;
+        match marker {
+            0xd9 => return Some(i),
+            0 | 0xd0..=0xd8 | 0x01 => (),
+            _ => {
+                let length = u16::from_be_bytes([*data.get(i)?, *data.get(i + 1)?]) as usize;
+                if length < 2 {
+                    return None;
+                }
+                i = i.checked_add(length)?;
+            }
+        }
     }
-
-    // If we never found EI, return end of data
-    len
+    None
 }
 
 #[cfg(test)]

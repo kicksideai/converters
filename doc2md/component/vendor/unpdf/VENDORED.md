@@ -138,17 +138,30 @@ counts, encoded streams, and unchanged pixels for painting colorants.
 
 ### 7. Painted Page XObjects (`src/parser/backend.rs`)
 
-`RawBackend::page_xobjects` returns the XObjects the page content stream paints
-with `Do`, in paint order, and descends into painted Form XObjects (their own
-`/Resources`, else the enclosing ones; at most eight levels). Upstream returns
-every entry of the page's `/Resources /XObject` dictionary. Pages that share one
-resource dictionary listing many scans therefore decoded every scan once per
-page, so decoded samples grew with pages times listed scans and exceeded the
-wasm32 4 GiB address space on long scanned documents. Each painted object is
-decoded once per page.
-Images inside a form are named `<form>_<name>` so they stay distinct from
-page-level names. Page image-resource counts consequently count painted
-XObjects. `page_xobjects_are_the_ones_its_content_paints` covers shared
-resources, unpainted entries, repeated paints and a nested form.
+`RawBackend::page_xobjects` follows painted content in page, Form, tiling-pattern,
+soft-mask, Type 3 glyph, and annotation-appearance streams. It uses a stream's
+own resources when present, otherwise the enclosing resources. Reference tracking
+prevents cycles without a fixed nesting cutoff. Tiling-pattern selection updates
+the fill or stroke graphics state, including `q`/`Q` save and restore. Path
+painting and text rendering modes traverse the selected pattern when used.
+Stencil images use the selected fill pattern, and inline-image dictionaries
+remain available to the content walk. Type 3 glyph streams paint independently
+of the ordinary text rendering mode. Forms inherit graphics state and keep their
+local changes isolated. Active
+references prevent recursion cycles; decode deduplication remains separate so
+repeated Form placements can use different inherited patterns.
 
-No other unpdf sources are modified.
+Upstream returns every entry of the page's `/Resources /XObject` dictionary.
+Pages sharing a dictionary of scans therefore decode every listed scan once per
+page. The painted-content walk decodes each distinct painted image object once
+per page. Resource identifiers use the PDF object number and generation, so
+names in different resource dictionaries cannot collide. Composition counts
+remain independent of decode deduplication: repeated image placements still
+require a composite page render.
+
+Inline-image boundaries come from sample layout or encoded filter boundaries,
+including CCITT via hayro-ccitt, so sample bytes cannot terminate the content
+walk. Generated PDF tests cover shared resources, distinct identifiers, repeated
+placements, unused and painted patterns, nested Forms, cycles, other image-bearing
+streams, and inline-image boundaries. The shared-resource test asserts each
+page's image decode count directly.

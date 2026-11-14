@@ -1003,6 +1003,16 @@ LICENSE-APACHE: [License text](#license-text-0cec06e0e55fbc3dc5cee4fca9b607f66cb
 
 LICENSE-MIT: [License text](#license-text-51b50e6120c344dcc146bbd6375ca1c78e079d97c8bea76e67a53d6ff0efebac)
 
+### cargo: hayro-ccitt@0.5.0
+
+License: Apache-2.0 OR MIT
+
+Lockfiles: `doc2md/component/Cargo.lock`, `doc2md/component/vendor/unpdf/Cargo.lock`
+
+LICENSE-APACHE: [License text](#license-text-0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9)
+
+LICENSE-MIT: [License text](#license-text-51b50e6120c344dcc146bbd6375ca1c78e079d97c8bea76e67a53d6ff0efebac)
+
 ### cargo: hayro-cmap@0.1.0
 
 License: Apache-2.0 OR MIT

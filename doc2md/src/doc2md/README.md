@@ -91,8 +91,10 @@ embedded or displayed.
 
 `doc2md.page_resources(request)` accepts the same `bytes` or `url` request and
 returns `[{ page, text_len, image_count }, ...]`, with one-based page
-numbers. For PDFs, `image_count` counts every direct image and Form resource
-before image-size filtering; a Form may contain further images. It helps callers
+numbers. For PDFs, `image_count` counts painted images (including repeated
+placements and inline images) and image-bearing content containers before
+image-size filtering. A container is traversed once per page; its repeated
+paints still increase the count. Image objects are decoded once per page. It helps callers
 decide whether extracted images cover a page or a composite render is needed.
 
 ## Response
