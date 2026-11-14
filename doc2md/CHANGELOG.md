@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.23](https://github.com/kicksideai/converters/compare/doc2md-v0.8.22...doc2md-v0.8.23) (2026-11-14)
+
+
+### Bug Fixes
+
+* **doc2md:** decode only the XObjects a page paints ([#31](https://github.com/kicksideai/converters/issues/31)) ([5d6d787](https://github.com/kicksideai/converters/commit/5d6d787a7ad61228b73faeeebcc7a5e0a82e3a16))
+* **doc2md:** preserve painted image identity and composition ([#33](https://github.com/kicksideai/converters/issues/33)) ([1a8f724](https://github.com/kicksideai/converters/commit/1a8f724827f70659f925f09310bcf03eaf4c324a))
+
 ## [0.8.22](https://github.com/kicksideai/converters/compare/doc2md-v0.8.21...doc2md-v0.8.22) (2026-11-12)
 
 
