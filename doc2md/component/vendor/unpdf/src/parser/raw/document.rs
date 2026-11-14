@@ -17,6 +17,9 @@ pub struct RawDocument {
     trailer: PdfDict,
     /// PDF version string (e.g., "1.4", "1.7").
     pub version: String,
+    pages: BTreeMap<u32, (u32, u16)>,
+    #[cfg(test)]
+    pub(crate) page_tree_walks: std::sync::atomic::AtomicUsize,
 }
 
 impl RawDocument {
@@ -60,6 +63,9 @@ impl RawDocument {
             objects,
             trailer,
             version,
+            pages: BTreeMap::new(),
+            #[cfg(test)]
+            page_tree_walks: std::sync::atomic::AtomicUsize::new(0),
         };
 
         // Decrypt before ObjStm extraction: ObjStm streams are encrypted and must
@@ -83,6 +89,7 @@ impl RawDocument {
             }
         }
 
+        doc.pages = doc.build_page_index();
         Ok(doc)
     }
 
@@ -249,8 +256,15 @@ impl RawDocument {
     }
 
     /// Get all pages as (1-based page_number -> (obj_num, gen_num)).
-    /// Traverses the page tree: Catalog -> Pages -> recursive Kids.
-    pub fn pages(&self) -> BTreeMap<u32, (u32, u16)> {
+    /// The index is built once after all document objects are loaded.
+    pub fn pages(&self) -> &BTreeMap<u32, (u32, u16)> {
+        &self.pages
+    }
+
+    fn build_page_index(&self) -> BTreeMap<u32, (u32, u16)> {
+        #[cfg(test)]
+        self.page_tree_walks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut result = BTreeMap::new();
         let mut page_num = 1u32;
 

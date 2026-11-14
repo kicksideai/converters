@@ -540,10 +540,10 @@ mod tests {
             Arc,
         };
 
-        struct Backend(Arc<AtomicUsize>);
+        struct Backend(Arc<AtomicUsize>, BTreeMap<u32, PageId>);
         impl PdfBackend for Backend {
-            fn pages(&self) -> BTreeMap<u32, PageId> {
-                (1..=100).map(|n| (n, (n, 0))).collect()
+            fn pages(&self) -> &BTreeMap<u32, PageId> {
+                &self.1
             }
             fn page_fonts(&self, _: PageId) -> Result<Vec<BackendFontInfo>> {
                 Ok(vec![])
@@ -592,7 +592,10 @@ mod tests {
         for parallel in [false, true] {
             let calls = Arc::new(AtomicUsize::new(0));
             let parser = PdfParser {
-                backend: Box::new(Backend(calls.clone())),
+                backend: Box::new(Backend(
+                    calls.clone(),
+                    (1..=100).map(|n| (n, (n, 0))).collect(),
+                )),
                 options: ParseOptions::new()
                     .with_resources(true)
                     .with_parallel(parallel),

@@ -100,8 +100,8 @@ pub struct RawPageXObjects {
 /// Implementations provide page enumeration, font info, content stream
 /// decoding, and text decoding — without exposing any concrete PDF library types.
 pub trait PdfBackend: Send + Sync {
-    /// Return all pages as (page_number → PageId).
-    fn pages(&self) -> BTreeMap<u32, PageId>;
+    /// Borrow the document page index as (page_number → PageId).
+    fn pages(&self) -> &BTreeMap<u32, PageId>;
 
     /// Return font info for a given page.
     fn page_fonts(&self, page: PageId) -> Result<Vec<BackendFontInfo>>;
@@ -212,7 +212,7 @@ impl RawBackend {
 }
 
 impl PdfBackend for RawBackend {
-    fn pages(&self) -> BTreeMap<u32, PageId> {
+    fn pages(&self) -> &BTreeMap<u32, PageId> {
         self.doc.pages()
     }
 
@@ -1941,6 +1941,36 @@ fn extract_dimensions_from_array(obj: &RawPdfObject) -> Option<(f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_index_walks_once_for_a_large_document() {
+        let count = 1025u32;
+        let kids = (3..count + 3)
+            .map(|id| format!("{id} 0 R"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            format!("<< /Type /Pages /Kids [{kids}] /Count {count} >>"),
+        ];
+        objects.extend((0..count).map(|_| {
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_string()
+        }));
+        let backend = backend_from_objects(&objects);
+        assert_eq!(backend.pages().len(), count as usize);
+        let options = crate::ParseOptions::default().with_resources(true);
+        for number in 1..=count {
+            let page = crate::parser::pdf_parser::parse_single_page(&backend, number, &options)
+                .unwrap();
+            assert_eq!(page.number, number);
+        }
+        assert_eq!(backend.doc.page_count(), count);
+        assert_eq!(
+            backend.doc.page_tree_walks.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "DOC2MD-PAGE-INDEX-REBUILD: all per-page paths share one document index"
+        );
+    }
 
     fn text_backend(font: &str, extra_objects: &[String]) -> RawBackend {
         let mut objects = vec![
