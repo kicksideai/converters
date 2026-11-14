@@ -165,3 +165,12 @@ walk. Generated PDF tests cover shared resources, distinct identifiers, repeated
 placements, unused and painted patterns, nested Forms, cycles, other image-bearing
 streams, and inline-image boundaries. The shared-resource test asserts each
 page's image decode count directly.
+
+### 8. Document Page Index (`src/parser/raw/document.rs`, `src/parser/backend.rs`)
+
+`RawDocument` builds its ordered page index once after loading and decrypting
+all objects, including compressed objects. `RawDocument::pages` and
+`PdfBackend::pages` borrow that index. Layout, page dimensions, resource extraction,
+and streaming therefore reuse the same map without cloning it or walking the
+page tree for each page. A generated 1,025-page regression counts tree walks
+across per-page parsing and requires exactly one walk per document.
