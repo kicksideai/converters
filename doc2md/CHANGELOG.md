@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.24](https://github.com/kicksideai/converters/compare/doc2md-v0.8.23...doc2md-v0.8.24) (2026-11-14)
+
+
+### Bug Fixes
+
+* **doc2md:** build the page index once per document ([#34](https://github.com/kicksideai/converters/issues/34)) ([b5c9966](https://github.com/kicksideai/converters/commit/b5c9966c4e18cccb705cf704b36dc3fe2455a134))
+
 ## [0.8.23](https://github.com/kicksideai/converters/compare/doc2md-v0.8.22...doc2md-v0.8.23) (2026-11-14)
 
 
