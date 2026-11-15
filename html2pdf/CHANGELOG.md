@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.9](https://github.com/kicksideai/converters/compare/html2pdf-v0.6.8...html2pdf-v0.6.9) (2026-11-15)
+
+
+### Performance Improvements
+
+* accelerate document conversion on released runtimes ([6ba1dcb](https://github.com/kicksideai/converters/commit/6ba1dcbf72ecc70865941ae7200c41ddbd530dff))
+
 ## 0.6.8 (2026-10-17)
 
 - Refresh packaged module descriptions and documentation.

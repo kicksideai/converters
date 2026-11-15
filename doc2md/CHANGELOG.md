@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.25](https://github.com/kicksideai/converters/compare/doc2md-v0.8.24...doc2md-v0.8.25) (2026-11-15)
+
+
+### Bug Fixes
+
+* **doc2md:** share cached font decode maps instead of copying them per text run ([#36](https://github.com/kicksideai/converters/issues/36)) ([b07d0cf](https://github.com/kicksideai/converters/commit/b07d0cf9a10e592404d081ed89b32c420cb62316))
+
+
+### Performance Improvements
+
+* accelerate document conversion on released runtimes ([6ba1dcb](https://github.com/kicksideai/converters/commit/6ba1dcbf72ecc70865941ae7200c41ddbd530dff))
+
 ## [0.8.24](https://github.com/kicksideai/converters/compare/doc2md-v0.8.23...doc2md-v0.8.24) (2026-11-14)
 
 
