@@ -1,0 +1,93 @@
+diff --git a/include/hpdf_fontdef.h b/include/hpdf_fontdef.h
+index c094f7f..78ab9b7 100644
+--- a/include/hpdf_fontdef.h
++++ b/include/hpdf_fontdef.h
+@@ -340,6 +340,12 @@ HPDF_TTFontDef_GetGlyphid  (HPDF_FontDef   fontdef,
+                             HPDF_UINT16    unicode);
+ 
+ 
++HPDF_UINT16
++HPDF_TTFontDef_GetGlyphidFrom  (HPDF_FontDef   fontdef,
++                                HPDF_UINT16    unicode,
++                                HPDF_UINT     *cursor);
++
++
+ HPDF_INT16
+ HPDF_TTFontDef_GetCharWidth  (HPDF_FontDef   fontdef,
+                               HPDF_UINT16    unicode);
+diff --git a/src/hpdf_font_cid.c b/src/hpdf_font_cid.c
+index 0d4ca1e..b62ae25 100644
+--- a/src/hpdf_font_cid.c
++++ b/src/hpdf_font_cid.c
+@@ -363,6 +363,7 @@ CIDFontType2_New (HPDF_Font parent, HPDF_Xref xref)
+     HPDF_Dict cid_system_info;
+ 
+     HPDF_UINT16 max = 0;
++    HPDF_UINT seg = 0;
+ 
+     HPDF_PTRACE ((" HPDF_CIDFontType2_New\n"));
+ 
+@@ -414,8 +415,8 @@ CIDFontType2_New (HPDF_Font parent, HPDF_Xref xref)
+ 		}
+ 	    } else {
+ 		HPDF_UNICODE unicode = (i << 8) | j;
+-		HPDF_UINT16 gid = HPDF_TTFontDef_GetGlyphid (fontdef,
+-							     unicode);
++		HPDF_UINT16 gid = HPDF_TTFontDef_GetGlyphidFrom (fontdef,
++							     unicode, &seg);
+ 		tmp_map[unicode] = gid;
+ 		if (max < unicode)
+ 		    max = unicode;
+diff --git a/src/hpdf_fontdef_tt.c b/src/hpdf_fontdef_tt.c
+index 5e70c6f..cbbb13d 100644
+--- a/src/hpdf_fontdef_tt.c
++++ b/src/hpdf_fontdef_tt.c
+@@ -1150,6 +1150,17 @@ ParseCMAP_format4  (HPDF_FontDef  fontdef,
+ HPDF_UINT16
+ HPDF_TTFontDef_GetGlyphid  (HPDF_FontDef   fontdef,
+                             HPDF_UINT16    unicode)
++{
++    return HPDF_TTFontDef_GetGlyphidFrom (fontdef, unicode, NULL);
++}
++
++
++/* With a cursor, codes must not decrease between calls: the segment search
++ * continues from the previous segment instead of starting over. */
++HPDF_UINT16
++HPDF_TTFontDef_GetGlyphidFrom  (HPDF_FontDef   fontdef,
++                                HPDF_UINT16    unicode,
++                                HPDF_UINT     *cursor)
+ {
+     HPDF_TTFontDefAttr attr = (HPDF_TTFontDefAttr)fontdef->attr;
+     HPDF_UINT16 *pend_count = attr->cmap.end_count;
+@@ -1175,10 +1186,26 @@ HPDF_TTFontDef_GetGlyphid  (HPDF_FontDef   fontdef,
+         return 0;
+     }
+ 
+-    for (i = 0; i < seg_count; i++) {
+-        if (unicode <= *pend_count)
+-            break;
+-        pend_count++;
++    /* end_count is sorted (TrueType cmap format 4), so find the first
++     * segment whose end is not below unicode by binary search. */
++    if (cursor) {
++        i = *cursor;
++        while (i < seg_count && pend_count[i] < unicode)
++            i++;
++        *cursor = i;
++    } else {
++        HPDF_UINT lo = 0;
++        HPDF_UINT hi = seg_count;
++
++        while (lo < hi) {
++            HPDF_UINT mid = lo + (hi - lo) / 2;
++
++            if (pend_count[mid] < unicode)
++                lo = mid + 1;
++            else
++                hi = mid;
++        }
++        i = lo;
+     }
+ 
+     if (i >= seg_count || attr->cmap.start_count[i] > unicode) {

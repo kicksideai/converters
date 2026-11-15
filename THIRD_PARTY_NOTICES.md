@@ -30,8 +30,8 @@ statically linked into the published `html2pdf.wasm`.
 | litehtml (commit `d96c0209f15624c3d3c82aa81c36032e87602cd9`) | BSD-3-Clause | `html2pdf/component/build.sh` (`third_party/litehtml`) |
 | gumbo-parser (bundled by litehtml) | Apache-2.0 | `html2pdf/component/build.sh` (`third_party/litehtml`) |
 
-`html2pdf/component/patches/*.patch` document the two local patches applied
-to libharu and litehtml before compilation.
+`html2pdf/component/patches/*.patch` document the local patches applied to
+libharu and litehtml before compilation.
 
 ## Acknowledgments
 
