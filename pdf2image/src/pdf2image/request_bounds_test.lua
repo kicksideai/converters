@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: MIT
 local test = require("test")
 local pdf2image = require("pdf2image")
 local fixtures = require("fixtures")
