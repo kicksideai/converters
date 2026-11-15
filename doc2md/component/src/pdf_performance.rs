@@ -340,3 +340,25 @@ fn an_image_shared_by_pages_is_one_file_per_page() {
         assert!(document.markdown.contains(&image.name));
     }
 }
+
+#[test]
+fn shared_image_respects_page_color_spaces() {
+    let objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] /Resources << /XObject << /Im0 5 0 R >> /ColorSpace << /CS [/Indexed /DeviceRGB 0 <FF0000>] >> >> /Contents 6 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] /Resources << /XObject << /Im0 5 0 R >> /ColorSpace << /CS [/Indexed /DeviceRGB 0 <0000FF>] >> >> /Contents 6 0 R >>".to_vec(),
+        b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /CS /BitsPerComponent 8 /Length 1 >>\nstream\n\x00\nendstream".to_vec(),
+        b"<< /Length 27 >>\nstream\nq 72 0 0 72 0 0 cm /Im0 Do Q\nendstream".to_vec(),
+    ];
+    let converted = convert_pdf(&pdf_from_objects(&objects), Settings {
+        extract_images: true, page_markers: false,
+    }).unwrap();
+    assert_eq!(converted.images.len(), 2);
+    for (image, expected) in converted.images.iter().zip([[255, 0, 0], [0, 0, 255]]) {
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&image.data)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!(&pixels[..info.buffer_size()], &expected);
+    }
+}
