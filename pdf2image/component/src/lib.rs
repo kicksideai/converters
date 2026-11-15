@@ -6,6 +6,7 @@ use hayro::vello_cpu::Pixmap;
 use hayro::{render, RenderCache, RenderSettings};
 use image::codecs::webp::WebPEncoder;
 use image::{ExtendedColorType, ImageEncoder};
+use std::cell::RefCell;
 use std::sync::Arc;
 
 #[allow(clippy::too_many_arguments)]
@@ -168,6 +169,44 @@ fn load(blob: Vec<u8>) -> Result<Pdf, RenderError> {
     Pdf::new(blob).map_err(|e| fail(ERR_PARSE, format!("failed to parse PDF: {e:?}")))
 }
 
+// The render cache borrows fonts and objects from the parsed document, so both are
+// kept together across calls. `cache` is declared first so it drops before `pdf`.
+struct Document {
+    cache: RenderCache<'static>,
+    pdf: Box<Pdf>,
+}
+
+thread_local! {
+    static DOCUMENT: RefCell<Option<Document>> = const { RefCell::new(None) };
+}
+
+// Runs `f` on the parsed document and its render cache. The SDK sends the same blob
+// for each page of a document, so the last document is reused when the bytes match.
+fn with_document<T>(
+    blob: Vec<u8>,
+    f: impl FnOnce(&'static Pdf, &RenderCache<'static>) -> Result<T, RenderError>,
+) -> Result<T, RenderError> {
+    DOCUMENT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let reuse = slot
+            .as_ref()
+            .is_some_and(|doc| doc.pdf.data().as_ref() == blob.as_slice());
+        if !reuse {
+            *slot = None;
+            *slot = Some(Document {
+                cache: RenderCache::new(),
+                pdf: Box::new(load(blob)?),
+            });
+        }
+        let doc = slot.as_ref().expect("document is set");
+        // SAFETY: the boxed document has a stable address and outlives the cache that
+        // borrows from it. Neither reference escapes this call, and the slot is not
+        // replaced while `f` runs because the RefCell stays borrowed.
+        let pdf: &'static Pdf = unsafe { &*(doc.pdf.as_ref() as *const Pdf) };
+        f(pdf, &doc.cache)
+    })
+}
+
 fn font_settings() -> InterpreterSettings {
     InterpreterSettings {
         font_resolver: Arc::new(|query| match query {
@@ -249,7 +288,7 @@ fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
 
 impl Guest for Component {
     fn pages(blob: Vec<u8>) -> Result<u32, RenderError> {
-        Ok(load(blob)?.pages().len() as u32)
+        with_document(blob, |pdf, _| Ok(pdf.pages().len() as u32))
     }
 
     fn render(
@@ -258,9 +297,9 @@ impl Guest for Component {
         options: RenderOptions,
     ) -> Result<Vec<Vec<u8>>, RenderError> {
         let settings = Settings::try_from(options)?;
-        let pdf = load(blob)?;
-        let cache = RenderCache::new();
-        render_pages(&pdf, &cache, pages, &settings)
+        with_document(blob, |pdf, cache| {
+            render_pages(pdf, cache, pages, &settings)
+        })
     }
 }
 
@@ -450,29 +489,46 @@ mod tests {
     }
 
     #[test]
-    fn render_releases_document_and_cache_after_each_request() {
+    fn requests_retain_only_the_last_document() {
+        let sample = include_bytes!("../tests/assets/sample.pdf").to_vec();
+        let colorants = include_bytes!("../tests/assets/colorant-images.pdf").to_vec();
         let before = test_alloc::live_bytes();
-        for page in [0, u32::MAX] {
-            let result = Component::render(
-                include_bytes!("../tests/assets/sample.pdf").to_vec(),
-                vec![page, page],
-                png_options(),
-            );
+
+        drop(Component::render(sample.clone(), vec![0], png_options()));
+        let retained = test_alloc::live_bytes();
+        assert!(
+            retained > before,
+            "the parsed document stays for the next page"
+        );
+
+        for page in [0, u32::MAX, 0] {
+            let result = Component::render(sample.clone(), vec![page, page], png_options());
             assert_eq!(result.is_ok(), page == 0);
             drop(result);
             assert_eq!(
                 test_alloc::live_bytes(),
-                before,
-                "completed and failed requests release parsed data and render caches"
+                retained,
+                "completed and failed requests on the same document do not grow memory"
             );
         }
+
+        assert!(Component::pages(colorants).is_ok());
+        assert!(Component::render(sample, vec![0], png_options()).is_ok());
+        assert!(
+            test_alloc::live_bytes() <= retained,
+            "a different document replaces the retained one instead of adding to it"
+        );
     }
 
     #[test]
-    fn pages_releases_parsed_document() {
-        let before = test_alloc::live_bytes();
-        assert!(Component::pages(include_bytes!("../tests/assets/sample.pdf").to_vec()).is_ok());
-        assert_eq!(test_alloc::live_bytes(), before);
+    fn pages_retains_one_document_without_growth() {
+        let sample = include_bytes!("../tests/assets/sample.pdf").to_vec();
+        assert!(Component::pages(sample.clone()).is_ok());
+        let retained = test_alloc::live_bytes();
+        for _ in 0..3 {
+            assert!(Component::pages(sample.clone()).is_ok());
+            assert_eq!(test_alloc::live_bytes(), retained);
+        }
     }
 
     #[test]
