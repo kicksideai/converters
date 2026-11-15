@@ -21,7 +21,7 @@ entries:
       comment: Rust WebAssembly component method returning the page count of a PDF.
     fs: kickside.convert.pdf2image:assets
     path: pdf2image.wasm
-    hash: sha256:ed8a5e891f80c996a4ef3c93f091f28caa6ae0918243800d16b14e1515dba057
+    hash: sha256:ebdafe423c7761e51450326a33548027bb156af7570dec74a157eefd61a8b86b
     method: pages
     imports:
       - wasi:io
@@ -43,7 +43,7 @@ entries:
       comment: Rust WebAssembly component method rendering selected PDF pages to PNG, JPEG, or WEBP images.
     fs: kickside.convert.pdf2image:assets
     path: pdf2image.wasm
-    hash: sha256:ed8a5e891f80c996a4ef3c93f091f28caa6ae0918243800d16b14e1515dba057
+    hash: sha256:ebdafe423c7761e51450326a33548027bb156af7570dec74a157eefd61a8b86b
     method: render
     imports:
       - wasi:io
