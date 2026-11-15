@@ -6,7 +6,7 @@ use hayro::vello_cpu::Pixmap;
 use hayro::{render, RenderCache, RenderSettings};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::webp::WebPEncoder;
-use image::{ExtendedColorType, ImageEncoder, RgbImage};
+use image::{ExtendedColorType, ImageBuffer, ImageEncoder, Rgba};
 use std::sync::Arc;
 
 #[allow(clippy::too_many_arguments)]
@@ -214,37 +214,44 @@ fn font_settings() -> InterpreterSettings {
     }
 }
 
+// Pixmap::into_png uses zlib level 6 with adaptive filtering. Level 2 with the Up
+// filter encodes a rendered page several times faster for slightly larger files.
+fn encode_png(pixmap: Pixmap) -> Result<Vec<u8>, png::EncodingError> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, pixmap.width() as u32, pixmap.height() as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_deflate_compression(png::DeflateCompression::Level(2));
+    encoder.set_filter(png::Filter::Up);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(bytemuck::cast_slice(&pixmap.take_unpremultiplied()))?;
+    writer.finish()?;
+    Ok(out)
+}
+
 fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
     match settings.format {
-        Format::Png => pixmap
-            .into_png()
-            .map_err(|e| fail(ERR_RENDER, format!("failed to encode PNG: {e:?}"))),
+        Format::Png => {
+            encode_png(pixmap).map_err(|e| fail(ERR_RENDER, format!("failed to encode PNG: {e:?}")))
+        }
         Format::Jpeg => {
             let width = pixmap.width() as u32;
             let height = pixmap.height() as u32;
-            // Build the RGB buffer directly from the pixels in one pass. JPEG has no
-            // alpha channel: with an opaque background every pixel is opaque, so RGB
-            // is taken as-is; with a transparent or semi-transparent background each
-            // pixel is composited over white.
-            let pixels = pixmap.take_unpremultiplied();
-            let mut rgb = Vec::with_capacity(pixels.len() * 3);
-            if settings.bg_color.components[3] >= 1.0 {
-                for p in &pixels {
-                    rgb.push(p.r);
-                    rgb.push(p.g);
-                    rgb.push(p.b);
-                }
-            } else {
-                for p in &pixels {
+            let mut pixels = pixmap.take_unpremultiplied();
+            if settings.bg_color.components[3] < 1.0 {
+                // JPEG has no alpha channel: composite each pixel over white.
+                for p in &mut pixels {
                     let a = p.a as u16;
                     let over = |c: u8| (((c as u16) * a + 255 * (255 - a)) / 255) as u8;
-                    rgb.push(over(p.r));
-                    rgb.push(over(p.g));
-                    rgb.push(over(p.b));
+                    p.r = over(p.r);
+                    p.g = over(p.g);
+                    p.b = over(p.b);
+                    p.a = 255;
                 }
             }
-            let img = RgbImage::from_raw(width, height, rgb)
-                .ok_or_else(|| fail(ERR_RENDER, "failed to build image buffer"))?;
+            let img = ImageBuffer::<Rgba<u8>, _>::from_raw(
+                width, height, bytemuck::cast_slice::<Rgba8, u8>(&pixels),
+            ).ok_or_else(|| fail(ERR_RENDER, "failed to build image buffer"))?;
             let mut out = Vec::new();
             JpegEncoder::new_with_quality(&mut out, settings.quality)
                 .encode_image(&img)
@@ -254,10 +261,15 @@ fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
         Format::Webp => {
             let width = pixmap.width() as u32;
             let height = pixmap.height() as u32;
-            let rgba = bytemuck::cast_slice::<Rgba8, u8>(&pixmap.take_unpremultiplied()).to_vec();
+            let pixels = pixmap.take_unpremultiplied();
             let mut out = Vec::new();
             WebPEncoder::new_lossless(&mut out)
-                .write_image(&rgba, width, height, ExtendedColorType::Rgba8)
+                .write_image(
+                    bytemuck::cast_slice::<Rgba8, u8>(&pixels),
+                    width,
+                    height,
+                    ExtendedColorType::Rgba8,
+                )
                 .map_err(|e| fail(ERR_RENDER, format!("failed to encode WEBP: {e:?}")))?;
             Ok(out)
         }
@@ -266,8 +278,7 @@ fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
 
 impl Guest for Component {
     fn pages(blob: Vec<u8>) -> Result<u32, RenderError> {
-        let pdf = load(blob)?;
-        Ok(pdf.pages().len() as u32)
+        Ok(load(blob)?.pages().len() as u32)
     }
 
     fn render(
@@ -277,64 +288,75 @@ impl Guest for Component {
     ) -> Result<Vec<Vec<u8>>, RenderError> {
         let settings = Settings::try_from(options)?;
         let pdf = load(blob)?;
-
-        let doc_pages = pdf.pages();
-        let count = doc_pages.len() as u32;
-
-        let selection: Vec<u32> = if pages.is_empty() {
-            (0..count).collect()
-        } else {
-            pages
-        };
-
-        if selection.len() > MAX_RENDER_PAGES {
-            return Err(fail(
-                ERR_RANGE,
-                format!(
-                    "requested {} pages exceeds the limit of {MAX_RENDER_PAGES}",
-                    selection.len()
-                ),
-            ));
-        }
-
         let cache = RenderCache::new();
-        let fonts = font_settings();
-        let mut rendered = Vec::with_capacity(selection.len());
-
-        for page in selection {
-            if page >= count {
-                return Err(fail(
-                    ERR_RANGE,
-                    format!("page index {page} out of range (document has {count} pages)"),
-                ));
-            }
-
-            let target = doc_pages
-                .get(page as usize)
-                .ok_or_else(|| fail(ERR_RANGE, format!("page index {page} not found")))?;
-
-            // hayro sizes the pixmap as page.render_dimensions() * scale.
-            let (page_w, page_h) = target.render_dimensions();
-            let scale = page_scale(page_w, page_h, settings.scale)
-                .map_err(|e| fail(e.code, format!("page {page}: {}", e.message)))?;
-
-            let render_settings = RenderSettings {
-                x_scale: scale,
-                y_scale: scale,
-                bg_color: settings.bg_color,
-                ..Default::default()
-            };
-
-            let pixmap = render(target, &cache, &fonts, &render_settings);
-            let bytes = encode(pixmap, &settings)?;
-            rendered.push(bytes);
-        }
-
-        Ok(rendered)
+        render_pages(&pdf, &cache, pages, &settings)
     }
 }
 
+fn render_pages<'a>(
+    pdf: &'a Pdf,
+    cache: &RenderCache<'a>,
+    pages: Vec<u32>,
+    settings: &Settings,
+) -> Result<Vec<Vec<u8>>, RenderError> {
+    let doc_pages = pdf.pages();
+    let count = doc_pages.len() as u32;
+
+    let selection: Vec<u32> = if pages.is_empty() {
+        (0..count).collect()
+    } else {
+        pages
+    };
+
+    if selection.len() > MAX_RENDER_PAGES {
+        return Err(fail(
+            ERR_RANGE,
+            format!(
+                "requested {} pages exceeds the limit of {MAX_RENDER_PAGES}",
+                selection.len()
+            ),
+        ));
+    }
+
+    let fonts = font_settings();
+    let mut rendered = Vec::with_capacity(selection.len());
+
+    for page in selection {
+        if page >= count {
+            return Err(fail(
+                ERR_RANGE,
+                format!("page index {page} out of range (document has {count} pages)"),
+            ));
+        }
+
+        let target = doc_pages
+            .get(page as usize)
+            .ok_or_else(|| fail(ERR_RANGE, format!("page index {page} not found")))?;
+
+        // hayro sizes the pixmap as page.render_dimensions() * scale.
+        let (page_w, page_h) = target.render_dimensions();
+        let scale = page_scale(page_w, page_h, settings.scale)
+            .map_err(|e| fail(e.code, format!("page {page}: {}", e.message)))?;
+
+        let render_settings = RenderSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: settings.bg_color,
+            ..Default::default()
+        };
+
+        let pixmap = render(target, cache, &fonts, &render_settings);
+        let bytes = encode(pixmap, settings)?;
+        rendered.push(bytes);
+    }
+
+    Ok(rendered)
+}
+
 bindings::export!(Component with_types_in bindings);
+
+#[cfg(test)]
+mod test_alloc;
 
 #[cfg(test)]
 mod tests {
@@ -400,6 +422,135 @@ mod tests {
 
     fn scaling(scale: f32, dpi: f32) -> ScalingOptions {
         ScalingOptions { dpi, scale }
+    }
+
+    fn png_options() -> RenderOptions {
+        RenderOptions {
+            scaling: scaling(0.0, 0.0),
+            output: bindings::OutputOptions {
+                format: "png".into(),
+                quality: 0,
+                background: String::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn jpeg_matches_previous_encoder() {
+        for quality in [1, 90, 100] {
+            for background in [WHITE, AlphaColor::TRANSPARENT] {
+                let mut pixmap = Pixmap::new(16, 16);
+                for (i, p) in pixmap.data_mut().iter_mut().enumerate() {
+                    let a = if background == WHITE { 255 } else { 128 };
+                    *p = hayro::vello_cpu::color::PremulRgba8 {
+                        r: if i < 128 { 0 } else { a }, g: 12, b: 4, a,
+                    };
+                }
+                let pixels = pixmap.clone().take_unpremultiplied();
+                let mut rgb = Vec::new();
+                for p in pixels {
+                    for c in [p.r, p.g, p.b] {
+                        rgb.push(if background == WHITE { c } else {
+                            ((c as u16 * p.a as u16 + 255 * (255 - p.a as u16)) / 255) as u8
+                        });
+                    }
+                }
+                let image = image::RgbImage::from_raw(16, 16, rgb).unwrap();
+                let mut previous = Vec::new();
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut previous, quality)
+                    .encode_image(&image).unwrap();
+                let actual = encode(pixmap, &Settings {
+                    scale: 1.0, format: Format::Jpeg, quality, bg_color: background,
+                }).unwrap();
+                assert_eq!(actual, previous, "quality {quality}, background {background:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn jpeg_preserves_single_pixel_color_detail() {
+        let mut pixmap = Pixmap::new(32, 16);
+        for (i, pixel) in pixmap.data_mut().iter_mut().enumerate() {
+            *pixel = if i % 2 == 0 {
+                hayro::vello_cpu::color::PremulRgba8 {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }
+            } else {
+                hayro::vello_cpu::color::PremulRgba8 {
+                    r: 0,
+                    g: 0,
+                    b: 255,
+                    a: 255,
+                }
+            };
+        }
+        let jpeg = encode(
+            pixmap,
+            &Settings {
+                scale: 1.0,
+                format: Format::Jpeg,
+                quality: 100,
+                bg_color: WHITE,
+            },
+        )
+        .unwrap();
+        let decoded = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        for (x, _, pixel) in decoded.enumerate_pixels() {
+            let expected = if x % 2 == 0 { [255, 0, 0] } else { [0, 0, 255] };
+            for c in 0..3 {
+                assert!(
+                    pixel[c].abs_diff(expected[c]) <= 5,
+                    "column {x}: expected {expected:?}, got {pixel:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_releases_document_and_cache_after_each_request() {
+        let before = test_alloc::live_bytes();
+        for page in [0, u32::MAX] {
+            let result = Component::render(
+                include_bytes!("../tests/assets/sample.pdf").to_vec(),
+                vec![page, page],
+                png_options(),
+            );
+            assert_eq!(result.is_ok(), page == 0);
+            drop(result);
+            assert_eq!(
+                test_alloc::live_bytes(),
+                before,
+                "completed and failed requests release parsed data and render caches"
+            );
+        }
+    }
+
+    #[test]
+    fn pages_releases_parsed_document() {
+        let before = test_alloc::live_bytes();
+        assert!(Component::pages(include_bytes!("../tests/assets/sample.pdf").to_vec()).is_ok());
+        assert_eq!(test_alloc::live_bytes(), before);
+    }
+
+    #[test]
+    fn independent_requests_render_their_own_documents() {
+        let sample = include_bytes!("../tests/assets/sample.pdf").to_vec();
+        let colorants = include_bytes!("../tests/assets/colorant-images.pdf").to_vec();
+
+        let first = Component::render(sample.clone(), vec![0], png_options()).unwrap();
+        let cached = Component::render(sample.clone(), vec![0], png_options()).unwrap();
+        assert_eq!(first, cached, "repeated requests render the same image");
+
+        let other = Component::render(colorants.clone(), vec![0], png_options()).unwrap();
+        assert_ne!(first, other, "different documents produce different images");
+        assert_eq!(Component::pages(colorants).unwrap(), 10);
+
+        let reloaded = Component::render(sample, vec![0], png_options()).unwrap();
+        assert_eq!(first, reloaded);
+        assert!(Component::render(b"not a pdf".to_vec(), vec![0], png_options()).is_err());
     }
 
     // Hot-path microbench: render dominates, encode is the part we own. Run:

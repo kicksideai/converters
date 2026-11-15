@@ -41,6 +41,22 @@ pub struct Resource {
 }
 
 impl Resource {
+    /// Copy every field except the binary data.
+    pub fn without_data(&self) -> Self {
+        Self {
+            page: self.page,
+            data: Vec::new(),
+            mime_type: self.mime_type.clone(),
+            resource_type: self.resource_type.clone(),
+            filename: self.filename.clone(),
+            width: self.width,
+            height: self.height,
+            color_space: self.color_space.clone(),
+            bits_per_component: self.bits_per_component,
+            samples: self.samples.clone(),
+        }
+    }
+
     /// Create a new resource.
     pub fn new(data: Vec<u8>, mime_type: impl Into<String>, resource_type: ResourceType) -> Self {
         Self {

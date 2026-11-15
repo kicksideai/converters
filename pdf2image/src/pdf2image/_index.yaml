@@ -21,7 +21,7 @@ entries:
       comment: Rust WebAssembly component method returning the page count of a PDF.
     fs: kickside.convert.pdf2image:assets
     path: pdf2image.wasm
-    hash: sha256:5e22afa1602aebdad1a4ff7fa50757393f6d05ef30be4f54c85069fef7be9776
+    hash: sha256:a315f16fd1a7e6e34d60429e71d014f11fe89affab5dc2ea13889913dddf588d
     method: pages
     imports:
       - wasi:io
@@ -43,7 +43,7 @@ entries:
       comment: Rust WebAssembly component method rendering selected PDF pages to PNG, JPEG, or WEBP images.
     fs: kickside.convert.pdf2image:assets
     path: pdf2image.wasm
-    hash: sha256:5e22afa1602aebdad1a4ff7fa50757393f6d05ef30be4f54c85069fef7be9776
+    hash: sha256:a315f16fd1a7e6e34d60429e71d014f11fe89affab5dc2ea13889913dddf588d
     method: render
     imports:
       - wasi:io
@@ -126,6 +126,19 @@ entries:
     source: file://fixtures.lua
     modules:
       - base64
+
+  - name: request_bounds_test
+    kind: function.lua
+    meta:
+      type: test
+      suite: pdf2image.request_bounds
+      timeout: 120s
+    source: file://request_bounds_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+      pdf2image: kickside.convert.pdf2image:pdf2image
+      fixtures: kickside.convert.pdf2image:fixtures
 
   - name: native_errors_test
     kind: function.lua

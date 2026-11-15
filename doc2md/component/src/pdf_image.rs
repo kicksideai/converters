@@ -6,26 +6,68 @@ use unpdf::{ColorSpace, Resource, SampleLayout};
 
 /// Returns the image file (bytes, extension) for a PDF image resource, or `None`
 /// when the resource holds no decodable image.
-pub(crate) fn image_file(resource: &Resource) -> Option<(Vec<u8>, &'static str)> {
-    let ext = match resource.mime_type.as_str() {
+/// Encoded image streams are moved into the file without a copy.
+pub(crate) fn image_file(resource: Resource) -> Option<(Vec<u8>, &'static str)> {
+    if let Some(ext) = encoded_extension(&resource.mime_type) {
+        return Some((resource.data, ext));
+    }
+    sampled_png(&resource)
+}
+
+fn encoded_extension(mime: &str) -> Option<&'static str> {
+    match mime {
         "image/jpeg" => Some("jpg"),
         "image/png" => Some("png"),
         "image/gif" => Some("gif"),
         "image/tiff" => Some("tiff"),
         "image/jp2" => Some("jp2"),
         _ => None,
-    };
-    if let Some(ext) = ext {
-        return Some((resource.data.clone(), ext));
     }
+}
+
+fn sampled_png(resource: &Resource) -> Option<(Vec<u8>, &'static str)> {
     let layout = resource.samples.as_ref()?;
     let (width, height, bits) = (
         resource.width?,
         resource.height?,
         resource.bits_per_component?,
     );
+    // 8-bit gray or RGB samples with the default decode are already PNG pixels.
+    if let Some((len, gray)) = direct_samples(resource.data.len(), width, height, bits, layout) {
+        return encode_png(&resource.data[..len], width, height, gray).map(|png| (png, "png"));
+    }
     let (pixels, gray) = render_samples(&resource.data, width, height, bits, layout)?;
     encode_png(&pixels, width, height, gray).map(|png| (png, "png"))
+}
+
+// Returns (byte length, is_gray) when the samples need no conversion.
+fn direct_samples(
+    data_len: usize,
+    width: u32,
+    height: u32,
+    bits: u8,
+    layout: &SampleLayout,
+) -> Option<(usize, bool)> {
+    let space = &layout.color_space;
+    if bits != 8
+        || width == 0
+        || height == 0
+        || !matches!(space, ColorSpace::Gray | ColorSpace::Rgb)
+    {
+        return None;
+    }
+    let default_decode = space.default_decode(bits);
+    if layout
+        .decode
+        .as_deref()
+        .is_some_and(|decode| decode != default_decode.as_slice())
+    {
+        return None;
+    }
+    let len = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(space.components())?;
+    (data_len >= len).then_some((len, space.is_gray()))
 }
 
 // Renders samples to 8-bit gray or RGB pixels; returns (pixels, is_gray).
@@ -108,6 +150,9 @@ fn encode_png(pixels: &[u8], width: u32, height: u32, gray: bool) -> Option<Vec<
     {
         let mut encoder = png::Encoder::new(&mut out, width, height);
         encoder.set_filter(png::Filter::Up);
+        // zlib level 2 with Up encodes several times faster than the default level 6
+        // for files a few percent larger.
+        encoder.set_deflate_compression(png::DeflateCompression::Level(2));
         encoder.set_color(if gray {
             png::ColorType::Grayscale
         } else {
@@ -137,7 +182,7 @@ mod tests {
             ("image/jp2", "jp2"),
         ] {
             assert_eq!(
-                image_file(&Resource::image(b"x".to_vec(), mime)),
+                image_file(Resource::image(b"x".to_vec(), mime)),
                 Some((b"x".to_vec(), ext))
             );
         }
@@ -153,7 +198,7 @@ mod tests {
                     color_space: space,
                     decode: None,
                 });
-            let (bytes, ext) = image_file(&resource).unwrap();
+            let (bytes, ext) = image_file(resource.clone()).unwrap();
             assert_eq!((&bytes[..8], ext), (&b"\x89PNG\r\n\x1a\n"[..], "png"));
         }
     }
@@ -178,7 +223,7 @@ mod tests {
     fn sample_buffers_without_a_layout_or_with_too_few_bytes_are_not_images() {
         assert_eq!(
             image_file(
-                &Resource::image(vec![1, 2, 3], "application/octet-stream")
+                Resource::image(vec![1, 2, 3], "application/octet-stream")
                     .with_dimensions(1, 1)
                     .with_bits_per_component(8)
             ),
@@ -191,7 +236,7 @@ mod tests {
                 color_space: ColorSpace::Rgb,
                 decode: None,
             });
-        assert_eq!(image_file(&short), None);
+        assert_eq!(image_file(short), None);
     }
 
     struct Object<'a> {
