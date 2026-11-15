@@ -79,6 +79,10 @@ rejected. All are optional.
 - **`scale`** — a multiplier relative to the native page size, where `1` is 72 DPI
   (`scale = 2` matches 144 DPI). Must be positive and no greater than `8`.
 - `dpi` and `scale` are mutually exclusive; setting both is an error.
+- `dpi` and `scale` are targets: pages render within 64 MP and 65,527 pixels per
+  dimension. A uniform scale reduction preserves the page aspect ratio when either
+  limit is exceeded. Requested scales remain unchanged when their integer output
+  dimensions fit both limits.
 
 ### Output
 
@@ -134,4 +138,5 @@ strings alone map to permanent `INVALID/invalid_input`.
 
 ## Build
 
-`make build-component` builds the component and stages it; `make test` runs the suite.
+`make build-component` builds and stages the component. `make test` runs the Rust
+component tests and the Lua suite.

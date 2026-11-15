@@ -77,7 +77,7 @@ jobs:
           engine: sqlite
           commands: "set -euo pipefail\nsource_root=\"$PWD\"\nexport TMPDIR=\"$source_root/.scratch\"\
             \nmkdir -p \"$TMPDIR\"\nmake -C pdf2image build-component\ncd pdf2image\n\
-            wippy update\nwippy lint --level error \nwippy test  2>&1 | tee .wippy-test.log\n\
+            wippy update\nwippy lint --level error \nmake test  2>&1 | tee .wippy-test.log\n\
             sed -E 's/\\x1B\\[[0-?]*[ -/]*[@-~]//g' .wippy-test.log > .wippy-test.clean.log\n\
             awk '/No tests found/ { empty=1 } /^[[:space:]]*FAILED([[:space:]]|$)/\
             \ { failed=1 } /^[[:space:]]*PASSED([[:space:]]|$)/ { passed=1 } END {\
@@ -107,7 +107,7 @@ jobs:
         node-version: '22'
     - uses: kicksideai/.github/actions/setup-wippy@5401fa65bed7d8648125957520e94206ed1ffd0b
       with:
-        version: 0.3.47a
+        version: 0.3.59a
         hub-url: https://hub.wippy.ai
     - name: Build, lint and Lua module tests
       run: ${{ matrix.commands }}

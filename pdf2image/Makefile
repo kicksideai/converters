@@ -1,4 +1,4 @@
-.PHONY: help wippy build-component install lint test check clean
+.PHONY: help wippy build-component install lint test test-component check clean
 
 RUNTIME_DIR ?= ../runtime
 OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
@@ -42,7 +42,10 @@ install:
 lint:
 	$(WIPPY) lint $(WIPPY_LINT_ARGS) --level error
 
-test:
+test-component:
+	cd component && cargo test --release
+
+test: test-component
 	$(WIPPY) test $(WIPPY_TEST_ARGS)
 
 check: build-component lint test
