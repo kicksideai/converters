@@ -6,7 +6,7 @@ use hayro::vello_cpu::Pixmap;
 use hayro::{render, RenderCache, RenderSettings};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::webp::WebPEncoder;
-use image::{ExtendedColorType, ImageEncoder, RgbImage};
+use image::{ExtendedColorType, ImageBuffer, ImageEncoder, Rgba};
 use std::sync::Arc;
 
 #[allow(clippy::too_many_arguments)]
@@ -237,29 +237,21 @@ fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
         Format::Jpeg => {
             let width = pixmap.width() as u32;
             let height = pixmap.height() as u32;
-            // Build the RGB buffer directly from the pixels in one pass. JPEG has no
-            // alpha channel: with an opaque background every pixel is opaque, so RGB
-            // is taken as-is; with a transparent or semi-transparent background each
-            // pixel is composited over white.
-            let pixels = pixmap.take_unpremultiplied();
-            let mut rgb = Vec::with_capacity(pixels.len() * 3);
-            if settings.bg_color.components[3] >= 1.0 {
-                for p in &pixels {
-                    rgb.push(p.r);
-                    rgb.push(p.g);
-                    rgb.push(p.b);
-                }
-            } else {
-                for p in &pixels {
+            let mut pixels = pixmap.take_unpremultiplied();
+            if settings.bg_color.components[3] < 1.0 {
+                // JPEG has no alpha channel: composite each pixel over white.
+                for p in &mut pixels {
                     let a = p.a as u16;
                     let over = |c: u8| (((c as u16) * a + 255 * (255 - a)) / 255) as u8;
-                    rgb.push(over(p.r));
-                    rgb.push(over(p.g));
-                    rgb.push(over(p.b));
+                    p.r = over(p.r);
+                    p.g = over(p.g);
+                    p.b = over(p.b);
+                    p.a = 255;
                 }
             }
-            let img = RgbImage::from_raw(width, height, rgb)
-                .ok_or_else(|| fail(ERR_RENDER, "failed to build image buffer"))?;
+            let img = ImageBuffer::<Rgba<u8>, _>::from_raw(
+                width, height, bytemuck::cast_slice::<Rgba8, u8>(&pixels),
+            ).ok_or_else(|| fail(ERR_RENDER, "failed to build image buffer"))?;
             let mut out = Vec::new();
             JpegEncoder::new_with_quality(&mut out, settings.quality)
                 .encode_image(&img)
