@@ -459,23 +459,19 @@ fn dispatch(
 fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError> {
     if bytes.starts_with(PDF_MAGIC) {
         let blob = trim_pdf_trailer(bytes);
-        let options = unpdf::ParseOptions::new().with_resources(true);
+        let options = unpdf::ParseOptions::new().with_image_counts(true);
         let doc = unpdf::parse_bytes_with_options(blob, options)
             .map_err(|e| fail(ERR_PARSE, e.to_string()))?;
         let mut out = Vec::with_capacity(doc.pages.len());
         for page in &doc.pages {
             let mut text = String::new();
-            let mut image_blocks: u32 = 0;
             for block in &page.elements {
-                if matches!(block, unpdf::Block::Image { .. }) {
-                    image_blocks += 1;
-                }
                 block.append_plain_text(&mut text);
             }
             out.push(PageInfo {
                 page: page.number,
                 text_len: text.trim().chars().count() as u32,
-                image_count: image_blocks.max(page.images.len() as u32).max(page.image_resource_count),
+                image_count: page.image_resource_count,
             });
         }
         return Ok(out);

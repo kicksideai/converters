@@ -220,6 +220,17 @@ fn hundred_scanned_pages_preserve_images_and_page_identity() {
 }
 
 #[test]
+fn hundred_scanned_pages_report_one_painted_image_each() {
+    let pages = collect_page_resources(&scanned_pdf(100)).unwrap();
+    assert_eq!(pages.len(), 100);
+    for (index, page) in pages.iter().enumerate() {
+        assert_eq!(page.page, index as u32 + 1);
+        assert_eq!(page.text_len, 0);
+        assert_eq!(page.image_count, 1);
+    }
+}
+
+#[test]
 fn raw_pdf_png_preserves_every_sample() {
     for (space, channels) in [("DeviceGray", 1), ("DeviceRGB", 3), ("DeviceCMYK", 4)] {
         let samples: Vec<u8> = (0..257 * 19 * channels)
@@ -260,5 +271,80 @@ fn raw_pdf_png_preserves_every_sample() {
         assert_eq!((info.width, info.height), (257, 19));
         assert_eq!(info.bit_depth, png::BitDepth::Eight);
         assert_eq!(&decoded[..info.buffer_size()], expected);
+    }
+}
+
+/// Page entries computed from a full parse that decodes every painted image.
+fn page_resources_from_extracted_images(bytes: &[u8]) -> Vec<(u32, u32, u32)> {
+    let options = unpdf::ParseOptions::new().with_resources(true);
+    let doc = unpdf::parse_bytes_with_options(trim_pdf_trailer(bytes), options).unwrap();
+    doc.pages
+        .iter()
+        .map(|page| {
+            let mut text = String::new();
+            let mut image_blocks: u32 = 0;
+            for block in &page.elements {
+                if matches!(block, unpdf::Block::Image { .. }) {
+                    image_blocks += 1;
+                }
+                block.append_plain_text(&mut text);
+            }
+            (
+                page.number,
+                text.trim().chars().count() as u32,
+                image_blocks
+                    .max(page.images.len() as u32)
+                    .max(page.image_resource_count),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn page_resources_match_a_full_image_extraction() {
+    let gray = "/Type /XObject /Subtype /Image /Width 80 /Height 80 /BitsPerComponent 8";
+    let samples = "z".repeat(6400);
+    let mixed = pdf_from_objects(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /A 6 0 R /B 6 0 R /N 7 0 R /T 8 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        {
+            let content = "BT /F1 12 Tf 72 700 Td (Mixed page text) Tj ET q /A Do Q q /B Do Q /N Do /T Do";
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes()
+        },
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        format!("<< {gray} /ColorSpace /DeviceGray /Length {} >>\nstream\n{samples}\nendstream", samples.len()).into_bytes(),
+        format!("<< {gray} /ColorSpace [/Separation /None /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>] /Length {} >>\nstream\n{samples}\nendstream", samples.len()).into_bytes(),
+        format!("<< {gray} /ColorSpace /DeviceGray /Width 4 /Height 4 /Length 16 >>\nstream\n{}\nendstream", "z".repeat(16)).into_bytes(),
+    ]);
+    for (name, pdf) in [
+        (
+            "sample",
+            include_bytes!("../tests/assets/sample.pdf").to_vec(),
+        ),
+        (
+            "ascii85_flate",
+            include_bytes!("../tests/assets/ascii85_flate.pdf").to_vec(),
+        ),
+        (
+            "heading_tie",
+            include_bytes!("../tests/assets/synthetic_heading_tie.pdf").to_vec(),
+        ),
+        (
+            "tounicode_nul",
+            include_bytes!("../tests/assets/synthetic_tounicode_nul.pdf").to_vec(),
+        ),
+        ("scanned", scanned_pdf(3)),
+        ("large_cmap", large_cmap_pdf(2, 50)),
+        ("mixed", mixed),
+    ] {
+        let expected = page_resources_from_extracted_images(&pdf);
+        let actual: Vec<(u32, u32, u32)> = collect_page_resources(&pdf)
+            .unwrap()
+            .iter()
+            .map(|page| (page.page, page.text_len, page.image_count))
+            .collect();
+        assert!(!expected.is_empty(), "{name}");
+        assert_eq!(actual, expected, "{name}");
     }
 }

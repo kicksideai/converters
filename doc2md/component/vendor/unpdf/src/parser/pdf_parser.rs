@@ -250,6 +250,10 @@ pub(crate) fn parse_single_page(
                 }
             }
         }
+    } else if options.count_images && options.extract_mode != ExtractMode::StructureOnly {
+        if let Some(page_id) = backend.pages().get(&page_num) {
+            page.image_resource_count = backend.page_paint_count(*page_id)?;
+        }
     }
 
     Ok(page)

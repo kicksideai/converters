@@ -187,3 +187,13 @@ no longer implements `Clone`, so a decode cannot copy a CMap. A backend
 regression asserts that repeated ToUnicode, embedded cmap, and encoding lookups
 return the same cached value. Component tests convert and scan a generated
 document whose font maps 60,000 two-byte codes across 10,000 text runs.
+
+### 10. Painted Image Counts Without Extraction (`src/parser/options.rs`, `src/parser/stream.rs`, `src/parser/pdf_parser.rs`, `src/parser/backend.rs`)
+
+`Page::image_resource_count` came only from resource extraction, which decodes
+every painted image. `ParseOptions::with_image_counts` sets the count without
+extracting resources. `PdfBackend::page_paint_count` runs the painted-content
+walk of patch 7 and skips building `RawXObject`s, so a page's paint count is
+identical to `page_xobjects` while no image sample is decoded. A backend
+regression covers repeated placements, Form, inline-image, and pattern paints
+and asserts zero image decodes.

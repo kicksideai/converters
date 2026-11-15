@@ -1,6 +1,7 @@
 local doc2md = require("doc2md")
 local fixtures = require("fixtures")
 local time = require("time")
+local compress = require("compress")
 
 local REPEATS = 1250
 
@@ -83,6 +84,24 @@ local function run_mode(extract_images)
     return summary
 end
 
+local function pdf_from_objects(objects)
+    local pdf = { "%PDF-1.4\n" }
+    local size = #pdf[1]
+    local offsets = {}
+    for index, object in ipairs(objects) do
+        offsets[index] = size
+        local chunk = string.format("%d 0 obj\n%s\nendobj\n", index, object)
+        pdf[#pdf + 1] = chunk
+        size = size + #chunk
+    end
+    pdf[#pdf + 1] = string.format("xref\n0 %d\n0000000000 65535 f \n", #objects + 1)
+    for _, offset in ipairs(offsets) do
+        pdf[#pdf + 1] = string.format("%010d 00000 n \n", offset)
+    end
+    pdf[#pdf + 1] = string.format("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", #objects + 1, size)
+    return table.concat(pdf)
+end
+
 -- Text pages sharing one Type0 font whose ToUnicode CMap maps CMAP_ENTRIES two-byte
 -- codes; every page shows CMAP_RUNS separate text runs through it. Same document as
 -- large_cmap_pdf in component/src/pdf_performance.rs.
@@ -135,21 +154,7 @@ local function large_cmap_pdf()
     end
     objects[2] = string.format("<< /Type /Pages /Count %d /Kids [%s] >>", CMAP_PAGES, table.concat(kids, " "))
 
-    local pdf = { "%PDF-1.4\n" }
-    local size = #pdf[1]
-    local offsets = {}
-    for index, object in ipairs(objects) do
-        offsets[index] = size
-        local chunk = string.format("%d 0 obj\n%s\nendobj\n", index, object)
-        pdf[#pdf + 1] = chunk
-        size = size + #chunk
-    end
-    pdf[#pdf + 1] = string.format("xref\n0 %d\n0000000000 65535 f \n", #objects + 1)
-    for _, offset in ipairs(offsets) do
-        pdf[#pdf + 1] = string.format("%010d 00000 n \n", offset)
-    end
-    pdf[#pdf + 1] = string.format("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", #objects + 1, size)
-    return table.concat(pdf)
+    return pdf_from_objects(objects)
 end
 
 local function run_cmap()
@@ -168,6 +173,43 @@ local function run_cmap()
     return { convert_ms = convert_ms, page_resources_ms = pages_ms }
 end
 
+-- Pages that each paint one Flate-compressed 1500x1800 RGB scan and carry no text.
+-- Same page shape as scanned_pdf in component/src/pdf_performance.rs.
+local SCAN_PAGES = 100
+
+local function scanned_pdf()
+    local objects = { "<< /Type /Catalog /Pages 2 0 R >>", "" }
+    local kids = {}
+    local content = "q 612 0 0 792 0 0 cm /Scan Do Q"
+    for page = 1, SCAN_PAGES do
+        local pixels = string.char(page % 256, 0, 0) .. string.rep("\255", 1500 * 1800 * 3 - 3)
+        local scan = compress.zlib.encode(pixels)
+        objects[#objects + 1] = string.format(
+            "<< /Type /XObject /Subtype /Image /Width 1500 /Height 1800 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream",
+            #scan, scan)
+        local image_id = #objects
+        objects[#objects + 1] = string.format("<< /Length %d >>\nstream\n%s\nendstream", #content, content)
+        objects[#objects + 1] = string.format(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Scan %d 0 R >> >> /Contents %d 0 R >>",
+            image_id, #objects)
+        kids[#kids + 1] = string.format("%d 0 R", #objects)
+    end
+    objects[2] = string.format("<< /Type /Pages /Count %d /Kids [%s] >>", SCAN_PAGES, table.concat(kids, " "))
+    return pdf_from_objects(objects)
+end
+
+local function run_scans()
+    local bytes = scanned_pdf()
+    local start = time.now()
+    local pages, pages_err = doc2md.page_resources({ bytes = bytes })
+    local pages_ms = time.now():sub(start):milliseconds()
+    print(string.format(
+        "doc2md load scans pdf_bytes=%d page_resources_ms=%d page_resources_err=%s pages=%s",
+        #bytes, pages_ms, tostring(pages_err), pages and #pages or "-"
+    ))
+    return { page_resources_ms = pages_ms }
+end
+
 local function run_off()
     return run_mode(false)
 end
@@ -180,4 +222,5 @@ return {
     run_off = run_off,
     run_on = run_on,
     run_cmap = run_cmap,
+    run_scans = run_scans,
 }

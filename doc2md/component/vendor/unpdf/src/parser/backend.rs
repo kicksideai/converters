@@ -134,6 +134,11 @@ pub trait PdfBackend: Send + Sync {
     /// Return XObjects (images) from a page.
     fn page_xobjects(&self, page: PageId) -> Result<RawPageXObjects>;
 
+    /// Count a page's paints as `page_xobjects` does, without extracting any XObject.
+    fn page_paint_count(&self, page: PageId) -> Result<u32> {
+        Ok(self.page_xobjects(page)?.paint_count)
+    }
+
     /// Extract AcroForm fields from the document.
     fn acroform_fields(&self) -> Vec<FormField> {
         vec![]
@@ -358,6 +363,22 @@ impl PdfBackend for RawBackend {
     }
 
     fn page_xobjects(&self, page: PageId) -> Result<RawPageXObjects> {
+        self.painted_page(page, true)
+    }
+
+    fn page_paint_count(&self, page: PageId) -> Result<u32> {
+        Ok(self.painted_page(page, false)?.paint_count)
+    }
+
+    fn acroform_fields(&self) -> Vec<FormField> {
+        self.extract_acroform_fields()
+    }
+}
+
+impl RawBackend {
+    /// Walk a page's painted content; `decode` collects the painted Image and
+    /// Form XObjects, otherwise only their paints are counted.
+    fn painted_page(&self, page: PageId, decode: bool) -> Result<RawPageXObjects> {
         let mut xobjects = RawPageXObjects::default();
 
         let empty_resources = RawPdfDict::new();
@@ -366,7 +387,7 @@ impl PdfBackend for RawBackend {
         let mut active = std::collections::HashSet::new();
         let content = self.page_content(page)?;
         let ops = self.decode_with_resources(&content, Some(res_dict))?;
-        self.painted_xobjects(&ops, res_dict, PaintGraphics::default(), &mut seen, &mut active, &mut xobjects)?;
+        self.painted_xobjects(&ops, res_dict, PaintGraphics::default(), decode, &mut seen, &mut active, &mut xobjects)?;
         let page_dict = self.doc.get_dict(page)?;
         if let Some(annotations) =
             raw_dict_get(page_dict, b"Annots").and_then(|r| self.doc.resolve(r).as_array())
@@ -393,7 +414,7 @@ impl PdfBackend for RawBackend {
                         Some(normal)
                     };
                     if let Some(appearance) = appearance {
-                        self.painted_stream(appearance, res_dict, PaintGraphics::default(), &mut seen, &mut active, &mut xobjects)?;
+                        self.painted_stream(appearance, res_dict, PaintGraphics::default(), decode, &mut seen, &mut active, &mut xobjects)?;
                     }
                 }
             }
@@ -401,12 +422,6 @@ impl PdfBackend for RawBackend {
         Ok(xobjects)
     }
 
-    fn acroform_fields(&self) -> Vec<FormField> {
-        self.extract_acroform_fields()
-    }
-}
-
-impl RawBackend {
     fn page_resources(&self, mut page: PageId) -> Option<&RawPdfDict> {
         let mut seen = std::collections::HashSet::new();
         while seen.insert(page) {
@@ -439,6 +454,7 @@ impl RawBackend {
         ops: &[ContentOp],
         res_dict: &'a RawPdfDict,
         mut graphics: PaintGraphics<'a>,
+        decode: bool,
         seen: &mut std::collections::HashSet<(u32, u16)>,
         active: &mut std::collections::HashSet<(u32, u16)>,
         xobjects: &mut RawPageXObjects,
@@ -462,7 +478,7 @@ impl RawBackend {
                     };
                     if stencil {
                         if let Some(pattern) = graphics.fill_pattern {
-                            self.painted_stream(pattern, res_dict, graphics, seen, active, xobjects)?;
+                            self.painted_stream(pattern, res_dict, graphics, decode, seen, active, xobjects)?;
                         }
                     }
                 }
@@ -471,7 +487,7 @@ impl RawBackend {
                         continue;
                     };
                     if let Some(object) = resource(b"XObject", name) {
-                        self.painted_stream(object, res_dict, graphics, seen, active, xobjects)?;
+                        self.painted_stream(object, res_dict, graphics, decode, seen, active, xobjects)?;
                     }
                 }
                 "scn" | "SCN" => {
@@ -490,12 +506,12 @@ impl RawBackend {
                 "f" | "F" | "f*" | "S" | "s" | "B" | "B*" | "b" | "b*" => {
                     if !matches!(op.operator.as_str(), "S" | "s") {
                         if let Some(pattern) = graphics.fill_pattern {
-                            self.painted_stream(pattern, res_dict, graphics, seen, active, xobjects)?;
+                            self.painted_stream(pattern, res_dict, graphics, decode, seen, active, xobjects)?;
                         }
                     }
                     if !matches!(op.operator.as_str(), "f" | "F" | "f*") {
                         if let Some(pattern) = graphics.stroke_pattern {
-                            self.painted_stream(pattern, res_dict, graphics, seen, active, xobjects)?;
+                            self.painted_stream(pattern, res_dict, graphics, decode, seen, active, xobjects)?;
                         }
                     }
                 }
@@ -510,7 +526,7 @@ impl RawBackend {
                             .and_then(|r| raw_resolve_dict(&self.doc, r))
                             .and_then(|dict| raw_dict_get(dict, b"G"))
                         {
-                            self.painted_stream(mask, res_dict, graphics, seen, active, xobjects)?;
+                            self.painted_stream(mask, res_dict, graphics, decode, seen, active, xobjects)?;
                         }
                         if let Some(value) = raw_dict_get(state, b"Font")
                             .and_then(|r| self.doc.resolve(r).as_array())
@@ -552,17 +568,17 @@ impl RawBackend {
                     });
                     if !type3 && matches!(graphics.text_mode, 0 | 2 | 4 | 6) {
                         if let Some(pattern) = graphics.fill_pattern {
-                            self.painted_stream(pattern, res_dict, graphics, seen, active, xobjects)?;
+                            self.painted_stream(pattern, res_dict, graphics, decode, seen, active, xobjects)?;
                         }
                     }
                     if !type3 && matches!(graphics.text_mode, 1 | 2 | 5 | 6) {
                         if let Some(pattern) = graphics.stroke_pattern {
-                            self.painted_stream(pattern, res_dict, graphics, seen, active, xobjects)?;
+                            self.painted_stream(pattern, res_dict, graphics, decode, seen, active, xobjects)?;
                         }
                     }
                     if let Some(font) = graphics.font {
                         for operand in &op.operands {
-                            self.painted_glyphs(operand, font, res_dict, graphics, seen, active, xobjects)?;
+                            self.painted_glyphs(operand, font, res_dict, graphics, decode, seen, active, xobjects)?;
                         }
                     }
                 }
@@ -577,6 +593,7 @@ impl RawBackend {
         object: &RawPdfObject,
         resources: &'a RawPdfDict,
         graphics: PaintGraphics<'a>,
+        decode: bool,
         seen: &mut std::collections::HashSet<(u32, u16)>,
         active: &mut std::collections::HashSet<(u32, u16)>,
         xobjects: &mut RawPageXObjects,
@@ -595,10 +612,10 @@ impl RawBackend {
                 Some(RawPdfObject::Bool(true)));
             if stencil {
                 if let Some(pattern) = graphics.fill_pattern {
-                    self.painted_stream(pattern, resources, graphics, seen, active, xobjects)?;
+                    self.painted_stream(pattern, resources, graphics, decode, seen, active, xobjects)?;
                 }
             }
-            if seen.insert(reference) {
+            if decode && seen.insert(reference) {
                 if let Some(image) = self.raw_xobject(name, stream, resources) {
                     xobjects.objects.push(image);
                 }
@@ -607,7 +624,7 @@ impl RawBackend {
             if !active.insert(reference) {
                 return Ok(());
             }
-            if subtype == Some(b"Form") && seen.insert(reference) {
+            if decode && subtype == Some(b"Form") && seen.insert(reference) {
                 if let Some(form) = self.raw_xobject(name, stream, resources) {
                     xobjects.objects.push(form);
                 }
@@ -617,7 +634,7 @@ impl RawBackend {
                 .unwrap_or(resources);
             let content = raw_stream::decompress(stream, |o| self.doc.resolve(o))?;
             let ops = self.decode_with_resources(&content, Some(resources))?;
-            self.painted_xobjects(&ops, resources, graphics, seen, active, xobjects)?;
+            self.painted_xobjects(&ops, resources, graphics, decode, seen, active, xobjects)?;
             active.remove(&reference);
         }
         Ok(())
@@ -629,6 +646,7 @@ impl RawBackend {
         font: &RawPdfDict,
         resources: &'a RawPdfDict,
         graphics: PaintGraphics<'a>,
+        decode: bool,
         seen: &mut std::collections::HashSet<(u32, u16)>,
         active: &mut std::collections::HashSet<(u32, u16)>,
         xobjects: &mut RawPageXObjects,
@@ -638,7 +656,7 @@ impl RawBackend {
         }
         if let PdfValue::Array(values) = operand {
             for value in values {
-                self.painted_glyphs(value, font, resources, graphics, seen, active, xobjects)?;
+                self.painted_glyphs(value, font, resources, graphics, decode, seen, active, xobjects)?;
             }
         }
         let PdfValue::Str(bytes) = operand else {
@@ -673,7 +691,7 @@ impl RawBackend {
             if let Some(object) =
                 raw_dict_get(glyphs, name).or_else(|| raw_dict_get(glyphs, b".notdef"))
             {
-                self.painted_stream(object, resources, graphics, seen, active, xobjects)?;
+                self.painted_stream(object, resources, graphics, decode, seen, active, xobjects)?;
             }
         }
         Ok(())
@@ -2400,6 +2418,41 @@ mod tests {
         assert_eq!(page.image_resource_count, 2);
         assert_eq!(page.extracted_resources.len(), 1);
         assert_eq!(backend.image_decodes.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn image_counts_follow_painted_content_without_decoding() {
+        use std::sync::atomic::Ordering;
+        let backend = painted_pdf(
+            "/XObject << /I 5 0 R /J 5 0 R /Fm 6 0 R >> /Pattern << /P 8 0 R >>",
+            "q /I Do Q q /J Do Q /Fm Do BI /W 1 /H 1 /CS /G /BPC 8 ID z EI /Pattern cs /P scn 0 0 10 10 re f",
+            vec![
+                stream_object(TEST_IMAGE, "z"),
+                stream_object(
+                    "/Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im 7 0 R >> >>",
+                    "/Im Do /Im Do",
+                ),
+                stream_object(TEST_IMAGE, "y"),
+                stream_object("/PatternType 1 /Resources << /XObject << /Im 5 0 R >> >>", "/Im Do"),
+            ],
+        );
+        let extracted = super::super::pdf_parser::parse_single_page(
+            &backend, 1, &super::super::ParseOptions::new().with_resources(true),
+        ).unwrap();
+        let decodes = backend.image_decodes.load(Ordering::Relaxed);
+        assert!(decodes > 0);
+        let counted = super::super::pdf_parser::parse_single_page(
+            &backend, 1, &super::super::ParseOptions::new().with_image_counts(true),
+        ).unwrap();
+        assert_eq!(counted.image_resource_count, extracted.image_resource_count);
+        assert_eq!(counted.image_resource_count, 8);
+        assert!(counted.extracted_resources.is_empty());
+        assert!(counted.images.is_empty());
+        assert_eq!(
+            backend.image_decodes.load(Ordering::Relaxed),
+            decodes,
+            "DOC2MD-PAGE-COUNT-DECODE: image counts decode no image samples"
+        );
     }
 
     #[test]
