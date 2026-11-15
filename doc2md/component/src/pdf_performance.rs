@@ -44,6 +44,10 @@ fn scanned_pdf(pages: usize) -> Vec<u8> {
         kids.join(" ")
     )
     .into_bytes();
+    pdf_from_objects(&objects)
+}
+
+fn pdf_from_objects(objects: &[Vec<u8>]) -> Vec<u8> {
     let mut pdf = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
     for (index, object) in objects.iter().enumerate() {
@@ -64,6 +68,125 @@ fn scanned_pdf(pages: usize) -> Vec<u8> {
     )
     .unwrap();
     pdf
+}
+
+const CMAP_ENTRIES: u32 = 60_000;
+const RUN_CODES: u32 = 8;
+
+fn cmap_glyph(code: u32) -> char {
+    char::from(b'a' + (code % 26) as u8)
+}
+
+fn run_codes(page: u32, run: u32, runs: u32) -> impl Iterator<Item = u32> {
+    let first = ((page * runs + run) * RUN_CODES) % (CMAP_ENTRIES - RUN_CODES) + 1;
+    first..first + RUN_CODES
+}
+
+fn run_word(page: u32, run: u32, runs: u32) -> String {
+    run_codes(page, run, runs).map(cmap_glyph).collect()
+}
+
+/// Text pages sharing one Type0 font whose ToUnicode CMap maps `CMAP_ENTRIES`
+/// two-byte codes; every page shows `runs` separate text runs through it.
+fn large_cmap_pdf(pages: u32, runs: u32) -> Vec<u8> {
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
+    );
+    let codes: Vec<u32> = (1..=CMAP_ENTRIES).collect();
+    for chunk in codes.chunks(100) {
+        cmap.push_str(&format!("{} beginbfchar\n", chunk.len()));
+        for code in chunk {
+            cmap.push_str(&format!(
+                "<{code:04X}> <{:04X}>\n",
+                cmap_glyph(*code) as u32
+            ));
+        }
+        cmap.push_str("endbfchar\n");
+    }
+    cmap.push_str("endcmap\nend\nend\n");
+
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        Vec::new(),
+        b"<< /Type /Font /Subtype /Type0 /BaseFont /Synthetic /Encoding /Identity-H /DescendantFonts [4 0 R] /ToUnicode 5 0 R >>".to_vec(),
+        b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Synthetic /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 500 >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{cmap}endstream", cmap.len()).into_bytes(),
+    ];
+    let mut kids = Vec::new();
+    for page in 0..pages {
+        let mut content = String::new();
+        for run in 0..runs {
+            let hex: String = run_codes(page, run, runs)
+                .map(|code| format!("{code:04X}"))
+                .collect();
+            let y = 780 - (run % 96) * 8;
+            let x = 36 + (run / 96) * 280;
+            content.push_str(&format!("BT /F1 6 Tf {x} {y} Td <{hex}> Tj ET\n"));
+        }
+        let content_id = objects.len() + 1;
+        objects.push(
+            format!(
+                "<< /Length {} >>\nstream\n{content}endstream",
+                content.len()
+            )
+            .into_bytes(),
+        );
+        let page_id = objects.len() + 1;
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>").into_bytes());
+        kids.push(format!("{page_id} 0 R"));
+    }
+    objects[1] = format!(
+        "<< /Type /Pages /Count {pages} /Kids [{}] >>",
+        kids.join(" ")
+    )
+    .into_bytes();
+    pdf_from_objects(&objects)
+}
+
+const LARGE_CMAP_PAGES: u32 = 50;
+const LARGE_CMAP_RUNS: u32 = 200;
+
+#[test]
+fn large_tounicode_cmap_converts_every_text_run() {
+    let (pages, runs) = (LARGE_CMAP_PAGES, LARGE_CMAP_RUNS);
+    let pdf = large_cmap_pdf(pages, runs);
+    let document = convert_pdf(
+        &pdf,
+        Settings {
+            extract_images: true,
+            page_markers: true,
+        },
+    )
+    .unwrap();
+    for page in 0..pages {
+        assert!(document
+            .markdown
+            .contains(&format!("<!-- page {} -->", page + 1)));
+        for run in [0, runs - 1] {
+            let word = run_word(page, run, runs);
+            assert!(
+                document.markdown.contains(&word),
+                "page {page} run {run}: {word}"
+            );
+        }
+    }
+}
+
+#[test]
+fn large_tounicode_cmap_page_resources_count_every_text_run() {
+    let (pages, runs) = (LARGE_CMAP_PAGES, LARGE_CMAP_RUNS);
+    let info = collect_page_resources(&large_cmap_pdf(pages, runs)).unwrap();
+    assert_eq!(info.len(), pages as usize);
+    for (index, page) in info.iter().enumerate() {
+        assert_eq!(page.page, index as u32 + 1);
+        assert_eq!(page.image_count, 0);
+        assert!(
+            page.text_len >= runs * RUN_CODES,
+            "page {}: {}",
+            page.page,
+            page.text_len
+        );
+    }
 }
 
 #[test]

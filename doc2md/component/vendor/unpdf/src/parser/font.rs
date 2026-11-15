@@ -40,7 +40,7 @@ pub fn decode_text_simple(bytes: &[u8]) -> String {
 // ---------------------------------------------------------------------------
 
 /// Parsed ToUnicode CMap: maps character codes to Unicode strings.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ToUnicodeMap {
     /// Bytes per character code (1 or 2). Determined from codespace range.
     pub(crate) code_width: usize,

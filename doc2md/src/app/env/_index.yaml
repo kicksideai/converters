@@ -56,10 +56,24 @@ entries:
       fixtures: app.env:doc2md_fixtures
       pdf_pages: app.env:pdf_pages
 
+  - name: doc2md_load_policy
+    kind: security.policy
+    meta:
+      comment: Lets the excluded local load tests call the Doc2MD converter functions.
+    policy:
+      resources: 'kickside.convert.doc2md:*'
+      actions: [funcs.call]
+      effect: allow
+
   - name: doc2md_load_off
     kind: process.lua
     meta:
       comment: Excluded local load test for Doc2MD with image extraction disabled.
+    security:
+      actor:
+        id: system:doc2md_load
+      policies:
+        - app.env:doc2md_load_policy
     source: file://doc2md_load_test.lua
     method: run_off
     modules:
@@ -72,8 +86,30 @@ entries:
     kind: process.lua
     meta:
       comment: Excluded local load test for Doc2MD with image extraction enabled.
+    security:
+      actor:
+        id: system:doc2md_load
+      policies:
+        - app.env:doc2md_load_policy
     source: file://doc2md_load_test.lua
     method: run_on
+    modules:
+      - time
+    imports:
+      doc2md: kickside.convert.doc2md:doc2md
+      fixtures: app.env:doc2md_fixtures
+
+  - name: doc2md_load_cmap
+    kind: process.lua
+    meta:
+      comment: Excluded local load test timing convert and page_resources on a large ToUnicode CMap PDF.
+    security:
+      actor:
+        id: system:doc2md_load
+      policies:
+        - app.env:doc2md_load_policy
+    source: file://doc2md_load_test.lua
+    method: run_cmap
     modules:
       - time
     imports:
