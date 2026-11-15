@@ -32,6 +32,7 @@ local RENDER = "kickside.convert.pdf2image:render"
 local DEFAULT_DPI = 150
 -- Concurrent render calls per multi-page render; matches the render pool max_size.
 local PARALLEL_RENDERS = 4
+local MAX_RENDER_PAGES = 1024
 local MAX_DPI = 600
 local MAX_SCALE = 8
 local MAX_INPUT_BYTES = 128 * 1024 * 1024
@@ -364,6 +365,12 @@ local function new(runtime: Runtime?): any
         end
 
         local function render_pages(zero_based_pages: { number }, options: any): (any, error?)
+            if #zero_based_pages > MAX_RENDER_PAGES then
+                return nil, (errors.new({kind = errors.INTERNAL, retryable = false,
+                    message = "requested " .. tostring(#zero_based_pages) .. " pages exceeds the limit of " .. tostring(MAX_RENDER_PAGES),
+                    details = {code = "render_failed"}}) :: error)
+            end
+
             if #zero_based_pages == 0 then
                 return {}, nil
             end

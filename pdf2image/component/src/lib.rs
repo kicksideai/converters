@@ -6,7 +6,6 @@ use hayro::vello_cpu::Pixmap;
 use hayro::{render, RenderCache, RenderSettings};
 use image::codecs::webp::WebPEncoder;
 use image::{ExtendedColorType, ImageEncoder};
-use std::cell::RefCell;
 use std::sync::Arc;
 
 #[allow(clippy::too_many_arguments)]
@@ -169,44 +168,6 @@ fn load(blob: Vec<u8>) -> Result<Pdf, RenderError> {
     Pdf::new(blob).map_err(|e| fail(ERR_PARSE, format!("failed to parse PDF: {e:?}")))
 }
 
-// The render cache borrows fonts and objects from the parsed document, so both are
-// kept together across calls. `cache` is declared first so it drops before `pdf`.
-struct Document {
-    cache: RenderCache<'static>,
-    pdf: Box<Pdf>,
-}
-
-thread_local! {
-    static DOCUMENT: RefCell<Option<Document>> = const { RefCell::new(None) };
-}
-
-// Runs `f` on the parsed document and its render cache. The SDK sends the same blob
-// for each page of a document, so the last document is reused when the bytes match.
-fn with_document<T>(
-    blob: Vec<u8>,
-    f: impl FnOnce(&'static Pdf, &RenderCache<'static>) -> Result<T, RenderError>,
-) -> Result<T, RenderError> {
-    DOCUMENT.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        let reuse = slot
-            .as_ref()
-            .is_some_and(|doc| doc.pdf.data().as_ref() == blob.as_slice());
-        if !reuse {
-            *slot = None;
-            *slot = Some(Document {
-                cache: RenderCache::new(),
-                pdf: Box::new(load(blob)?),
-            });
-        }
-        let doc = slot.as_ref().expect("document is set");
-        // SAFETY: the boxed document has a stable address and outlives the cache that
-        // borrows from it. Neither reference escapes this call, and the slot is not
-        // replaced while `f` runs because the RefCell stays borrowed.
-        let pdf: &'static Pdf = unsafe { &*(doc.pdf.as_ref() as *const Pdf) };
-        f(pdf, &doc.cache)
-    })
-}
-
 fn font_settings() -> InterpreterSettings {
     InterpreterSettings {
         font_resolver: Arc::new(|query| match query {
@@ -241,8 +202,8 @@ fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
             let (width, height) = (pixmap.width(), pixmap.height());
             let mut out = Vec::new();
             let mut encoder = jpeg_encoder::Encoder::new(&mut out, settings.quality);
-            // 4:2:2 chroma subsampling, as the previous image-crate encoder used.
-            encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_1);
+            // Preserve the full chroma resolution of the previous image encoder.
+            encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
             let encoded = if settings.bg_color.components[3] >= 1.0 {
                 // An opaque background keeps every pixel opaque, so premultiplied
                 // RGBA equals straight RGBA and the encoder ignores alpha.
@@ -288,7 +249,7 @@ fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
 
 impl Guest for Component {
     fn pages(blob: Vec<u8>) -> Result<u32, RenderError> {
-        with_document(blob, |pdf, _| Ok(pdf.pages().len() as u32))
+        Ok(load(blob)?.pages().len() as u32)
     }
 
     fn render(
@@ -297,9 +258,9 @@ impl Guest for Component {
         options: RenderOptions,
     ) -> Result<Vec<Vec<u8>>, RenderError> {
         let settings = Settings::try_from(options)?;
-        with_document(blob, |pdf, cache| {
-            render_pages(pdf, cache, pages, &settings)
-        })
+        let pdf = load(blob)?;
+        let cache = RenderCache::new();
+        render_pages(&pdf, &cache, pages, &settings)
     }
 }
 
@@ -365,6 +326,9 @@ fn render_pages<'a>(
 }
 
 bindings::export!(Component with_types_in bindings);
+
+#[cfg(test)]
+mod test_alloc;
 
 #[cfg(test)]
 mod tests {
@@ -444,19 +408,84 @@ mod tests {
     }
 
     #[test]
-    fn document_cache_reuses_and_replaces_documents() {
+    fn jpeg_preserves_single_pixel_color_detail() {
+        let mut pixmap = Pixmap::new(32, 16);
+        for (i, pixel) in pixmap.data_mut().iter_mut().enumerate() {
+            *pixel = if i % 2 == 0 {
+                hayro::vello_cpu::color::PremulRgba8 {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }
+            } else {
+                hayro::vello_cpu::color::PremulRgba8 {
+                    r: 0,
+                    g: 0,
+                    b: 255,
+                    a: 255,
+                }
+            };
+        }
+        let jpeg = encode(
+            pixmap,
+            &Settings {
+                scale: 1.0,
+                format: Format::Jpeg,
+                quality: 100,
+                bg_color: WHITE,
+            },
+        )
+        .unwrap();
+        let decoded = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        for (x, _, pixel) in decoded.enumerate_pixels() {
+            let expected = if x % 2 == 0 { [255, 0, 0] } else { [0, 0, 255] };
+            for c in 0..3 {
+                assert!(
+                    pixel[c].abs_diff(expected[c]) <= 5,
+                    "column {x}: expected {expected:?}, got {pixel:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_releases_document_and_cache_after_each_request() {
+        let before = test_alloc::live_bytes();
+        for page in [0, u32::MAX] {
+            let result = Component::render(
+                include_bytes!("../tests/assets/sample.pdf").to_vec(),
+                vec![page, page],
+                png_options(),
+            );
+            assert_eq!(result.is_ok(), page == 0);
+            drop(result);
+            assert_eq!(
+                test_alloc::live_bytes(),
+                before,
+                "completed and failed requests release parsed data and render caches"
+            );
+        }
+    }
+
+    #[test]
+    fn pages_releases_parsed_document() {
+        let before = test_alloc::live_bytes();
+        assert!(Component::pages(include_bytes!("../tests/assets/sample.pdf").to_vec()).is_ok());
+        assert_eq!(test_alloc::live_bytes(), before);
+    }
+
+    #[test]
+    fn independent_requests_render_their_own_documents() {
         let sample = include_bytes!("../tests/assets/sample.pdf").to_vec();
         let colorants = include_bytes!("../tests/assets/colorant-images.pdf").to_vec();
 
         let first = Component::render(sample.clone(), vec![0], png_options()).unwrap();
         let cached = Component::render(sample.clone(), vec![0], png_options()).unwrap();
-        assert_eq!(first, cached, "a cached document renders the same image");
+        assert_eq!(first, cached, "repeated requests render the same image");
 
         let other = Component::render(colorants.clone(), vec![0], png_options()).unwrap();
-        assert_ne!(
-            first, other,
-            "a different blob replaces the cached document"
-        );
+        assert_ne!(first, other, "different documents produce different images");
         assert_eq!(Component::pages(colorants).unwrap(), 10);
 
         let reloaded = Component::render(sample, vec![0], png_options()).unwrap();
