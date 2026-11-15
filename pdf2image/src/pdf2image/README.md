@@ -79,6 +79,8 @@ rejected. All are optional.
 - **`scale`** — a multiplier relative to the native page size, where `1` is 72 DPI
   (`scale = 2` matches 144 DPI). Must be positive and no greater than `8`.
 - `dpi` and `scale` are mutually exclusive; setting both is an error.
+- `dpi` and `scale` are targets: a page whose output would exceed 64 MP renders at
+  the largest scale that fits 64 MP, keeping its aspect ratio.
 
 ### Output
 

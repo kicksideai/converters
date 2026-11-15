@@ -86,6 +86,21 @@ fn output_pixels(page_w: f32, page_h: f32, scale: f32) -> Result<u64, RenderErro
     Ok(pixels)
 }
 
+// Scale for a `page_w` x `page_h` (points) page: the requested scale, lowered to
+// the largest one whose output fits MAX_OUTPUT_PIXELS. Rounds toward zero so the
+// floored output stays within the limit.
+fn page_scale(page_w: f32, page_h: f32, requested: f32) -> Result<f32, RenderError> {
+    if !page_w.is_finite() || !page_h.is_finite() || page_w <= 0.0 || page_h <= 0.0 {
+        return Err(fail(ERR_RANGE, "invalid page dimensions"));
+    }
+    let fit = (MAX_OUTPUT_PIXELS as f64 / (f64::from(page_w) * f64::from(page_h))).sqrt();
+    let mut fit_scale = fit as f32;
+    if f64::from(fit_scale) > fit {
+        fit_scale = fit_scale.next_down();
+    }
+    Ok(requested.min(fit_scale))
+}
+
 fn parse_hex_pair(bytes: &[u8], index: usize) -> Result<u8, RenderError> {
     // saturating_add keeps the slice end within usize.
     let pair = bytes
@@ -278,15 +293,15 @@ impl Guest for Component {
                 .get(page as usize)
                 .ok_or_else(|| fail(ERR_RANGE, format!("page index {page} not found")))?;
 
-            // hayro sizes the pixmap as page.render_dimensions() * scale; reject
-            // over-budget dimensions before rendering.
+            // hayro sizes the pixmap as page.render_dimensions() * scale.
             let (page_w, page_h) = target.render_dimensions();
-            output_pixels(page_w, page_h, settings.scale)
+            let scale = page_scale(page_w, page_h, settings.scale)
+                .and_then(|scale| output_pixels(page_w, page_h, scale).map(|_| scale))
                 .map_err(|e| fail(e.code, format!("page {page}: {}", e.message)))?;
 
             let render_settings = RenderSettings {
-                x_scale: settings.scale,
-                y_scale: settings.scale,
+                x_scale: scale,
+                y_scale: scale,
                 bg_color: settings.bg_color,
                 ..Default::default()
             };
@@ -512,6 +527,127 @@ mod tests {
         assert!(output_pixels(100.0, 0.0, 1.0).is_err());
         assert!(output_pixels(f32::NAN, 100.0, 1.0).is_err());
         assert!(output_pixels(-100.0, 100.0, 1.0).is_err());
+    }
+
+    // Single-page PDF of `width` x `height` points painting one 2x2 RGB image over
+    // the whole page.
+    fn image_page_pdf(width: u32, height: u32) -> Vec<u8> {
+        let content = format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q");
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+                 /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
+            ),
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let samples = [0u8, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0, 0];
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 \
+                 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >>\nstream\n",
+                samples.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&samples);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes(),
+        );
+        for offset in &offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                offsets.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    #[test]
+    fn large_format_page_renders_within_the_pixel_limit() {
+        // 150x100.17 in: 22500x15024 px at 150 DPI, over MAX_OUTPUT_PIXELS.
+        let (page_w, page_h) = (10800u32, 7212u32);
+        let options = RenderOptions {
+            scaling: scaling(0.0, DEFAULT_DPI),
+            output: bindings::OutputOptions {
+                format: "jpeg".into(),
+                quality: 0,
+                background: String::new(),
+            },
+        };
+        let images = <Component as Guest>::render(image_page_pdf(page_w, page_h), vec![0], options)
+            .map_err(|e| e.message)
+            .expect("large-format page renders");
+        let img = image::load_from_memory(&images[0]).expect("decode jpeg");
+        let pixels = u64::from(img.width()) * u64::from(img.height());
+        assert!(pixels <= MAX_OUTPUT_PIXELS, "{pixels} px over the limit");
+        assert!(
+            pixels as f64 >= MAX_OUTPUT_PIXELS as f64 * 0.999,
+            "{}x{} renders well below the limit",
+            img.width(),
+            img.height()
+        );
+        let aspect = f64::from(img.width()) / f64::from(img.height());
+        let target = f64::from(page_w) / f64::from(page_h);
+        assert!(
+            (aspect / target - 1.0).abs() < 1e-3,
+            "aspect {aspect} vs {target}"
+        );
+    }
+
+    #[test]
+    fn page_scale_keeps_requested_scale_within_the_limit() {
+        let scale = DEFAULT_DPI / PDF_POINTS_PER_INCH;
+        assert_eq!(page_scale(612.0, 792.0, scale).unwrap(), scale);
+    }
+
+    #[test]
+    fn page_scale_bounds_oversized_output_to_the_limit() {
+        for (w, h, requested) in [
+            (10800.0, 7212.0, DEFAULT_DPI / PDF_POINTS_PER_INCH),
+            (612.0, 792.0, 1.0e6),
+            (612.0, 792.0, f32::MAX),
+            (200_000.0, 200_000.0, 1.0),
+            (8192.0, 8192.0, 1.0),
+        ] {
+            let scale = page_scale(w, h, requested).unwrap();
+            assert!(scale <= requested);
+            let pixels = output_pixels(w, h, scale).unwrap();
+            assert!(
+                pixels as f64 >= MAX_OUTPUT_PIXELS as f64 * 0.99,
+                "{w}x{h}: {pixels} px"
+            );
+        }
+    }
+
+    #[test]
+    fn page_scale_rejects_invalid_dimensions() {
+        for (w, h) in [
+            (0.0, 100.0),
+            (100.0, 0.0),
+            (f32::NAN, 100.0),
+            (-100.0, 100.0),
+            (f32::INFINITY, 100.0),
+        ] {
+            assert_eq!(page_scale(w, h, 1.0).unwrap_err().code, ERR_RANGE);
+        }
     }
 
     fn rng(s: &mut u64) -> u64 {
