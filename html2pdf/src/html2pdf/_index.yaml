@@ -21,7 +21,7 @@ entries:
       comment: Rust-free C/C++ WebAssembly component method rendering HTML to PDF bytes.
     fs: kickside.convert.html2pdf:assets
     path: html2pdf.wasm
-    hash: sha256:6d697f7bf9be79d653979000fd2b3abee8933cfcc08c1c328754cbbd98b02bbf
+    hash: sha256:ac36a6b5da7cb7c796925c17680427dce5537f09209e479d62c117963f544da2
     method: render
     imports:
       - wasi:io
