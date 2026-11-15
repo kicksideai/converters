@@ -46,7 +46,9 @@ local jpg = doc.to_image(1, { format = "jpeg", quality = 85, scale = 2 })
 
 ### `handle.render(opts) -> images, err`
 
-Renders several pages in a single call (the document is parsed once). Accepts the
+Renders several pages. The pages are split into up to four contiguous groups that
+render concurrently on the `render` pool, and each pool instance parses the
+document once and reuses it for later calls with the same bytes. Accepts the
 same render options plus a `pages` selector.
 
 - **`opts.pages`** — which pages to render:

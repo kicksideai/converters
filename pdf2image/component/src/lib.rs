@@ -4,9 +4,9 @@ use hayro::hayro_syntax::Pdf;
 use hayro::vello_cpu::color::{AlphaColor, Rgba8, Srgb};
 use hayro::vello_cpu::Pixmap;
 use hayro::{render, RenderCache, RenderSettings};
-use image::codecs::jpeg::JpegEncoder;
 use image::codecs::webp::WebPEncoder;
-use image::{ExtendedColorType, ImageEncoder, RgbImage};
+use image::{ExtendedColorType, ImageEncoder};
+use std::cell::RefCell;
 use std::sync::Arc;
 
 #[allow(clippy::too_many_arguments)]
@@ -169,6 +169,44 @@ fn load(blob: Vec<u8>) -> Result<Pdf, RenderError> {
     Pdf::new(blob).map_err(|e| fail(ERR_PARSE, format!("failed to parse PDF: {e:?}")))
 }
 
+// The render cache borrows fonts and objects from the parsed document, so both are
+// kept together across calls. `cache` is declared first so it drops before `pdf`.
+struct Document {
+    cache: RenderCache<'static>,
+    pdf: Box<Pdf>,
+}
+
+thread_local! {
+    static DOCUMENT: RefCell<Option<Document>> = const { RefCell::new(None) };
+}
+
+// Runs `f` on the parsed document and its render cache. The SDK sends the same blob
+// for each page of a document, so the last document is reused when the bytes match.
+fn with_document<T>(
+    blob: Vec<u8>,
+    f: impl FnOnce(&'static Pdf, &RenderCache<'static>) -> Result<T, RenderError>,
+) -> Result<T, RenderError> {
+    DOCUMENT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let reuse = slot
+            .as_ref()
+            .is_some_and(|doc| doc.pdf.data().as_ref() == blob.as_slice());
+        if !reuse {
+            *slot = None;
+            *slot = Some(Document {
+                cache: RenderCache::new(),
+                pdf: Box::new(load(blob)?),
+            });
+        }
+        let doc = slot.as_ref().expect("document is set");
+        // SAFETY: the boxed document has a stable address and outlives the cache that
+        // borrows from it. Neither reference escapes this call, and the slot is not
+        // replaced while `f` runs because the RefCell stays borrowed.
+        let pdf: &'static Pdf = unsafe { &*(doc.pdf.as_ref() as *const Pdf) };
+        f(pdf, &doc.cache)
+    })
+}
+
 fn font_settings() -> InterpreterSettings {
     InterpreterSettings {
         font_resolver: Arc::new(|query| match query {
@@ -179,27 +217,45 @@ fn font_settings() -> InterpreterSettings {
     }
 }
 
+// Pixmap::into_png uses zlib level 6 with adaptive filtering. Level 2 with the Up
+// filter encodes a rendered page several times faster for slightly larger files.
+fn encode_png(pixmap: Pixmap) -> Result<Vec<u8>, png::EncodingError> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, pixmap.width() as u32, pixmap.height() as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_deflate_compression(png::DeflateCompression::Level(2));
+    encoder.set_filter(png::Filter::Up);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(bytemuck::cast_slice(&pixmap.take_unpremultiplied()))?;
+    writer.finish()?;
+    Ok(out)
+}
+
 fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
     match settings.format {
-        Format::Png => pixmap
-            .into_png()
-            .map_err(|e| fail(ERR_RENDER, format!("failed to encode PNG: {e:?}"))),
+        Format::Png => {
+            encode_png(pixmap).map_err(|e| fail(ERR_RENDER, format!("failed to encode PNG: {e:?}")))
+        }
         Format::Jpeg => {
-            let width = pixmap.width() as u32;
-            let height = pixmap.height() as u32;
-            // Build the RGB buffer directly from the pixels in one pass. JPEG has no
-            // alpha channel: with an opaque background every pixel is opaque, so RGB
-            // is taken as-is; with a transparent or semi-transparent background each
-            // pixel is composited over white.
-            let pixels = pixmap.take_unpremultiplied();
-            let mut rgb = Vec::with_capacity(pixels.len() * 3);
-            if settings.bg_color.components[3] >= 1.0 {
-                for p in &pixels {
-                    rgb.push(p.r);
-                    rgb.push(p.g);
-                    rgb.push(p.b);
-                }
+            let (width, height) = (pixmap.width(), pixmap.height());
+            let mut out = Vec::new();
+            let mut encoder = jpeg_encoder::Encoder::new(&mut out, settings.quality);
+            // 4:2:2 chroma subsampling, as the previous image-crate encoder used.
+            encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_1);
+            let encoded = if settings.bg_color.components[3] >= 1.0 {
+                // An opaque background keeps every pixel opaque, so premultiplied
+                // RGBA equals straight RGBA and the encoder ignores alpha.
+                encoder.encode(
+                    bytemuck::cast_slice(pixmap.data()),
+                    width,
+                    height,
+                    jpeg_encoder::ColorType::Rgba,
+                )
             } else {
+                // JPEG has no alpha channel: composite each pixel over white.
+                let pixels = pixmap.take_unpremultiplied();
+                let mut rgb = Vec::with_capacity(pixels.len() * 3);
                 for p in &pixels {
                     let a = p.a as u16;
                     let over = |c: u8| (((c as u16) * a + 255 * (255 - a)) / 255) as u8;
@@ -207,22 +263,23 @@ fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
                     rgb.push(over(p.g));
                     rgb.push(over(p.b));
                 }
-            }
-            let img = RgbImage::from_raw(width, height, rgb)
-                .ok_or_else(|| fail(ERR_RENDER, "failed to build image buffer"))?;
-            let mut out = Vec::new();
-            JpegEncoder::new_with_quality(&mut out, settings.quality)
-                .encode_image(&img)
-                .map_err(|e| fail(ERR_RENDER, format!("failed to encode JPEG: {e:?}")))?;
+                encoder.encode(&rgb, width, height, jpeg_encoder::ColorType::Rgb)
+            };
+            encoded.map_err(|e| fail(ERR_RENDER, format!("failed to encode JPEG: {e:?}")))?;
             Ok(out)
         }
         Format::Webp => {
             let width = pixmap.width() as u32;
             let height = pixmap.height() as u32;
-            let rgba = bytemuck::cast_slice::<Rgba8, u8>(&pixmap.take_unpremultiplied()).to_vec();
+            let pixels = pixmap.take_unpremultiplied();
             let mut out = Vec::new();
             WebPEncoder::new_lossless(&mut out)
-                .write_image(&rgba, width, height, ExtendedColorType::Rgba8)
+                .write_image(
+                    bytemuck::cast_slice::<Rgba8, u8>(&pixels),
+                    width,
+                    height,
+                    ExtendedColorType::Rgba8,
+                )
                 .map_err(|e| fail(ERR_RENDER, format!("failed to encode WEBP: {e:?}")))?;
             Ok(out)
         }
@@ -231,8 +288,7 @@ fn encode(pixmap: Pixmap, settings: &Settings) -> Result<Vec<u8>, RenderError> {
 
 impl Guest for Component {
     fn pages(blob: Vec<u8>) -> Result<u32, RenderError> {
-        let pdf = load(blob)?;
-        Ok(pdf.pages().len() as u32)
+        with_document(blob, |pdf, _| Ok(pdf.pages().len() as u32))
     }
 
     fn render(
@@ -241,63 +297,71 @@ impl Guest for Component {
         options: RenderOptions,
     ) -> Result<Vec<Vec<u8>>, RenderError> {
         let settings = Settings::try_from(options)?;
-        let pdf = load(blob)?;
+        with_document(blob, |pdf, cache| {
+            render_pages(pdf, cache, pages, &settings)
+        })
+    }
+}
 
-        let doc_pages = pdf.pages();
-        let count = doc_pages.len() as u32;
+fn render_pages<'a>(
+    pdf: &'a Pdf,
+    cache: &RenderCache<'a>,
+    pages: Vec<u32>,
+    settings: &Settings,
+) -> Result<Vec<Vec<u8>>, RenderError> {
+    let doc_pages = pdf.pages();
+    let count = doc_pages.len() as u32;
 
-        let selection: Vec<u32> = if pages.is_empty() {
-            (0..count).collect()
-        } else {
-            pages
-        };
+    let selection: Vec<u32> = if pages.is_empty() {
+        (0..count).collect()
+    } else {
+        pages
+    };
 
-        if selection.len() > MAX_RENDER_PAGES {
+    if selection.len() > MAX_RENDER_PAGES {
+        return Err(fail(
+            ERR_RANGE,
+            format!(
+                "requested {} pages exceeds the limit of {MAX_RENDER_PAGES}",
+                selection.len()
+            ),
+        ));
+    }
+
+    let fonts = font_settings();
+    let mut rendered = Vec::with_capacity(selection.len());
+
+    for page in selection {
+        if page >= count {
             return Err(fail(
                 ERR_RANGE,
-                format!(
-                    "requested {} pages exceeds the limit of {MAX_RENDER_PAGES}",
-                    selection.len()
-                ),
+                format!("page index {page} out of range (document has {count} pages)"),
             ));
         }
 
-        let cache = RenderCache::new();
-        let fonts = font_settings();
-        let mut rendered = Vec::with_capacity(selection.len());
+        let target = doc_pages
+            .get(page as usize)
+            .ok_or_else(|| fail(ERR_RANGE, format!("page index {page} not found")))?;
 
-        for page in selection {
-            if page >= count {
-                return Err(fail(
-                    ERR_RANGE,
-                    format!("page index {page} out of range (document has {count} pages)"),
-                ));
-            }
+        // hayro sizes the pixmap as page.render_dimensions() * scale; reject
+        // over-budget dimensions before rendering.
+        let (page_w, page_h) = target.render_dimensions();
+        output_pixels(page_w, page_h, settings.scale)
+            .map_err(|e| fail(e.code, format!("page {page}: {}", e.message)))?;
 
-            let target = doc_pages
-                .get(page as usize)
-                .ok_or_else(|| fail(ERR_RANGE, format!("page index {page} not found")))?;
+        let render_settings = RenderSettings {
+            x_scale: settings.scale,
+            y_scale: settings.scale,
+            bg_color: settings.bg_color,
+            ..Default::default()
+        };
 
-            // hayro sizes the pixmap as page.render_dimensions() * scale; reject
-            // over-budget dimensions before rendering.
-            let (page_w, page_h) = target.render_dimensions();
-            output_pixels(page_w, page_h, settings.scale)
-                .map_err(|e| fail(e.code, format!("page {page}: {}", e.message)))?;
-
-            let render_settings = RenderSettings {
-                x_scale: settings.scale,
-                y_scale: settings.scale,
-                bg_color: settings.bg_color,
-                ..Default::default()
-            };
-
-            let pixmap = render(target, &cache, &fonts, &render_settings);
-            let bytes = encode(pixmap, &settings)?;
-            rendered.push(bytes);
-        }
-
-        Ok(rendered)
+        let pixmap = render(target, cache, &fonts, &render_settings);
+        let bytes = encode(pixmap, settings)?;
+        rendered.push(bytes);
     }
+
+    Ok(rendered)
 }
 
 bindings::export!(Component with_types_in bindings);
@@ -366,6 +430,38 @@ mod tests {
 
     fn scaling(scale: f32, dpi: f32) -> ScalingOptions {
         ScalingOptions { dpi, scale }
+    }
+
+    fn png_options() -> RenderOptions {
+        RenderOptions {
+            scaling: scaling(0.0, 0.0),
+            output: bindings::OutputOptions {
+                format: "png".into(),
+                quality: 0,
+                background: String::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn document_cache_reuses_and_replaces_documents() {
+        let sample = include_bytes!("../tests/assets/sample.pdf").to_vec();
+        let colorants = include_bytes!("../tests/assets/colorant-images.pdf").to_vec();
+
+        let first = Component::render(sample.clone(), vec![0], png_options()).unwrap();
+        let cached = Component::render(sample.clone(), vec![0], png_options()).unwrap();
+        assert_eq!(first, cached, "a cached document renders the same image");
+
+        let other = Component::render(colorants.clone(), vec![0], png_options()).unwrap();
+        assert_ne!(
+            first, other,
+            "a different blob replaces the cached document"
+        );
+        assert_eq!(Component::pages(colorants).unwrap(), 10);
+
+        let reloaded = Component::render(sample, vec![0], png_options()).unwrap();
+        assert_eq!(first, reloaded);
+        assert!(Component::render(b"not a pdf".to_vec(), vec![0], png_options()).is_err());
     }
 
     // Hot-path microbench: render dominates, encode is the part we own. Run:
