@@ -31,6 +31,13 @@ const DEFAULT_JPEG_QUALITY: u8 = 90;
 // Per-page pixel ceiling: 64 MP (e.g. 8192x8192) ~ 256 MB rgba. page-size * scale
 // stays under this.
 const MAX_OUTPUT_PIXELS: u64 = 64 * 1024 * 1024;
+// vello_common 0.0.8, tile.rs: Tile::WIDTH = 4. rect.rs includes the
+// right-edge tile, then tests col + WIDTH once more. Both sums use u16:
+// floor(d / WIDTH) * WIDTH + 2 * WIDTH <= u16::MAX. Thus d <= 65_527.
+// Use the same bound for either orientation (tiles are square).
+const RENDER_TILE_WIDTH: u16 = 4;
+const MAX_OUTPUT_DIMENSION: f32 =
+    ((u16::MAX / RENDER_TILE_WIDTH - 1) * RENDER_TILE_WIDTH - 1) as f32;
 // Maximum pages rendered per request.
 const MAX_RENDER_PAGES: usize = 1024;
 const WHITE: AlphaColor<Srgb> = AlphaColor::from_rgba8(255, 255, 255, 255);
@@ -69,36 +76,49 @@ fn resolve_scale(scaling: &ScalingOptions) -> f32 {
 // an error for non-finite, degenerate, or over-budget dimensions. saturating_mul
 // bounds the multiply.
 fn output_pixels(page_w: f32, page_h: f32, scale: f32) -> Result<u64, RenderError> {
+    checked_pixels(page_w, page_h, scale).map_err(|message| fail(ERR_RANGE, message))
+}
+
+fn checked_pixels(page_w: f32, page_h: f32, scale: f32) -> Result<u64, &'static str> {
     let out_w = (page_w * scale).floor();
     let out_h = (page_h * scale).floor();
     if !out_w.is_finite() || !out_h.is_finite() || out_w < 1.0 || out_h < 1.0 {
-        return Err(fail(ERR_RANGE, "invalid render dimensions"));
+        return Err("invalid render dimensions");
+    }
+    if out_w > MAX_OUTPUT_DIMENSION || out_h > MAX_OUTPUT_DIMENSION {
+        return Err("render dimensions exceed the renderer limit");
     }
     let pixels = (out_w as u64).saturating_mul(out_h as u64);
     if pixels > MAX_OUTPUT_PIXELS {
-        return Err(fail(
-            ERR_RANGE,
-            format!(
-                "renders to {out_w}x{out_h} ({pixels} px), over the {MAX_OUTPUT_PIXELS} px limit"
-            ),
-        ));
+        return Err("render dimensions exceed the pixel limit");
     }
     Ok(pixels)
 }
 
 // Scale for a `page_w` x `page_h` (points) page: the requested scale, lowered to
-// the largest one whose output fits MAX_OUTPUT_PIXELS. Rounds toward zero so the
-// floored output stays within the limit.
+// a uniform fit within the pixel and renderer dimension limits. Integer output
+// dimensions determine whether the requested scale already fits.
 fn page_scale(page_w: f32, page_h: f32, requested: f32) -> Result<f32, RenderError> {
     if !page_w.is_finite() || !page_h.is_finite() || page_w <= 0.0 || page_h <= 0.0 {
         return Err(fail(ERR_RANGE, "invalid page dimensions"));
     }
-    let fit = (MAX_OUTPUT_PIXELS as f64 / (f64::from(page_w) * f64::from(page_h))).sqrt();
+    if checked_pixels(page_w, page_h, requested).is_ok() {
+        return Ok(requested);
+    }
+    let width = f64::from(page_w);
+    let height = f64::from(page_h);
+    let fit = (MAX_OUTPUT_PIXELS as f64 / (width * height)).sqrt();
     let mut fit_scale = fit as f32;
     if f64::from(fit_scale) > fit {
         fit_scale = fit_scale.next_down();
     }
-    Ok(requested.min(fit_scale))
+    // Dimension ratios round to the nearest f32: the renderer floors their
+    // products, so rounding down here can unnecessarily lose a whole pixel.
+    let scale = requested
+        .min(fit_scale)
+        .min(MAX_OUTPUT_DIMENSION / page_w)
+        .min(MAX_OUTPUT_DIMENSION / page_h);
+    output_pixels(page_w, page_h, scale).map(|_| scale)
 }
 
 fn parse_hex_pair(bytes: &[u8], index: usize) -> Result<u8, RenderError> {
@@ -296,7 +316,6 @@ impl Guest for Component {
             // hayro sizes the pixmap as page.render_dimensions() * scale.
             let (page_w, page_h) = target.render_dimensions();
             let scale = page_scale(page_w, page_h, settings.scale)
-                .and_then(|scale| output_pixels(page_w, page_h, scale).map(|_| scale))
                 .map_err(|e| fail(e.code, format!("page {page}: {}", e.message)))?;
 
             let render_settings = RenderSettings {
@@ -610,6 +629,90 @@ mod tests {
             (aspect / target - 1.0).abs() < 1e-3,
             "aspect {aspect} vs {target}"
         );
+    }
+
+    #[test]
+    fn panoramic_pages_preserve_full_content_and_aspect() {
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for (width, height) in [(14_400, 144), (144, 14_400), (65_527, 144), (65_531, 144)] {
+                let options = RenderOptions {
+                    scaling: scaling(if width > 14_400 { 1.0 } else { 8.0 }, 0.0),
+                    output: bindings::OutputOptions {
+                        format: "jpeg".into(),
+                        quality: 90,
+                        background: String::new(),
+                    },
+                };
+                let images =
+                    <Component as Guest>::render(image_page_pdf(width, height), vec![0], options)
+                        .map_err(|e| e.message)
+                        .expect("panoramic page renders");
+                let img = image::load_from_memory(&images[0])
+                    .expect("decode jpeg")
+                    .to_rgb8();
+                let aspect = f64::from(img.width()) / f64::from(img.height());
+                let target = f64::from(width) / f64::from(height);
+                assert!(
+                    (aspect / target - 1.0).abs() < 1.0 / f64::from(img.width().min(img.height())),
+                    "{}x{}: aspect {aspect} vs {target}",
+                    img.width(),
+                    img.height()
+                );
+                assert_eq!(img.width().max(img.height()), 65_527);
+                assert!(u64::from(img.width()) * u64::from(img.height()) <= MAX_OUTPUT_PIXELS);
+                for (x, y, light) in [(1, 1, false), (99, 1, true), (1, 99, true), (99, 99, false)]
+                {
+                    let pixel = img.get_pixel(img.width() * x / 100, img.height() * y / 100);
+                    assert!(
+                        pixel
+                            .0
+                            .iter()
+                            .all(|c| if light { *c > 240 } else { *c < 15 }),
+                        "full-page image corner ({x}, {y}): {pixel:?}"
+                    );
+                }
+            }
+            send.send(()).unwrap();
+        });
+        receive
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("panoramic rendering completes without a tile-counter loop");
+    }
+
+    #[test]
+    fn page_scale_fits_renderer_tile_boundary() {
+        for (width, height) in [(65_527.0, 9.0), (9.0, 65_527.0)] {
+            assert_eq!(page_scale(width, height, 1.0).unwrap(), 1.0);
+        }
+        for (width, height) in [(65_531.0, 9.0), (9.0, 65_531.0)] {
+            let scale = page_scale(width, height, 1.0).unwrap();
+            assert!(scale < 1.0);
+            assert_eq!((width.max(height) * scale).floor() as u32, 65_527);
+        }
+    }
+
+    #[test]
+    fn page_scale_keeps_in_budget_integer_dimensions() {
+        for (width, height) in [(8192.9, 8192.1), (8192.1, 8192.9)] {
+            let scale = page_scale(width, height, 1.0).unwrap();
+            assert_eq!(scale, 1.0);
+            assert_eq!((width * scale).floor() as u32, 8192);
+            assert_eq!((height * scale).floor() as u32, 8192);
+            assert_eq!(
+                output_pixels(width, height, scale).unwrap(),
+                MAX_OUTPUT_PIXELS
+            );
+        }
+    }
+
+    #[test]
+    fn output_pixels_rejects_renderer_dimension_overflow() {
+        assert!(output_pixels(65_536.0, 1.0, 1.0).is_err());
+        assert!(output_pixels(1.0, 65_536.0, 1.0).is_err());
+        assert!(output_pixels(65_528.0, 1.0, 1.0).is_err());
+        assert!(output_pixels(1.0, 65_528.0, 1.0).is_err());
+        assert_eq!(output_pixels(65_527.0, 1.0, 1.0).unwrap(), 65_527);
     }
 
     #[test]
