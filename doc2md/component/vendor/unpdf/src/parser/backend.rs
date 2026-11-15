@@ -93,6 +93,8 @@ pub struct RawXObject {
 pub struct RawPageXObjects {
     pub objects: Vec<RawXObject>,
     pub paint_count: u32,
+    /// Count paints without decoding images or forms into `objects`.
+    pub count_only: bool,
 }
 
 /// Abstract interface for PDF document access.
@@ -133,6 +135,11 @@ pub trait PdfBackend: Send + Sync {
 
     /// Return XObjects (images) from a page.
     fn page_xobjects(&self, page: PageId) -> Result<RawPageXObjects>;
+
+    /// Count the XObjects and inline images a page paints.
+    fn page_paint_count(&self, page: PageId) -> Result<u32> {
+        Ok(self.page_xobjects(page)?.paint_count)
+    }
 
     /// Extract AcroForm fields from the document.
     fn acroform_fields(&self) -> Vec<FormField> {
@@ -358,7 +365,21 @@ impl PdfBackend for RawBackend {
     }
 
     fn page_xobjects(&self, page: PageId) -> Result<RawPageXObjects> {
-        let mut xobjects = RawPageXObjects::default();
+        self.collect_page_xobjects(page, false)
+    }
+
+    fn page_paint_count(&self, page: PageId) -> Result<u32> {
+        Ok(self.collect_page_xobjects(page, true)?.paint_count)
+    }
+
+    fn acroform_fields(&self) -> Vec<FormField> {
+        self.extract_acroform_fields()
+    }
+}
+
+impl RawBackend {
+    fn collect_page_xobjects(&self, page: PageId, count_only: bool) -> Result<RawPageXObjects> {
+        let mut xobjects = RawPageXObjects { count_only, ..Default::default() };
 
         let empty_resources = RawPdfDict::new();
         let res_dict = self.page_resources(page).unwrap_or(&empty_resources);
@@ -399,10 +420,6 @@ impl PdfBackend for RawBackend {
             }
         }
         Ok(xobjects)
-    }
-
-    fn acroform_fields(&self) -> Vec<FormField> {
-        self.extract_acroform_fields()
     }
 }
 
@@ -598,7 +615,7 @@ impl RawBackend {
                     self.painted_stream(pattern, resources, graphics, seen, active, xobjects)?;
                 }
             }
-            if seen.insert(reference) {
+            if !xobjects.count_only && seen.insert(reference) {
                 if let Some(image) = self.raw_xobject(name, stream, resources) {
                     xobjects.objects.push(image);
                 }
@@ -607,7 +624,7 @@ impl RawBackend {
             if !active.insert(reference) {
                 return Ok(());
             }
-            if subtype == Some(b"Form") && seen.insert(reference) {
+            if subtype == Some(b"Form") && !xobjects.count_only && seen.insert(reference) {
                 if let Some(form) = self.raw_xobject(name, stream, resources) {
                     xobjects.objects.push(form);
                 }

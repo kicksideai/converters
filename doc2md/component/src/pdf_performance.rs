@@ -250,7 +250,7 @@ fn raw_pdf_png_preserves_every_sample() {
                 },
                 decode: None,
             });
-        let (bytes, extension) = pdf_image::image_file(&resource).unwrap();
+        let (bytes, extension) = pdf_image::image_file(resource).unwrap();
         assert_eq!(extension, "png");
         let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
             .read_info()
@@ -260,5 +260,83 @@ fn raw_pdf_png_preserves_every_sample() {
         assert_eq!((info.width, info.height), (257, 19));
         assert_eq!(info.bit_depth, png::BitDepth::Eight);
         assert_eq!(&decoded[..info.buffer_size()], expected);
+    }
+}
+
+#[test]
+fn counting_page_images_matches_extracting_them() {
+    for pdf in [
+        scanned_pdf(3),
+        include_bytes!("../tests/assets/sample.pdf").to_vec(),
+    ] {
+        let parse = |options: unpdf::ParseOptions| {
+            unpdf::parse_bytes_with_options(trim_pdf_trailer(&pdf), options).unwrap()
+        };
+        let extracted = parse(unpdf::ParseOptions::new().with_resources(true));
+        let counted = parse(unpdf::ParseOptions::new().with_resource_counts(true));
+        assert!(counted.resources.is_empty(), "counting decodes no resource");
+        let counts = |doc: &unpdf::Document| -> Vec<u32> {
+            doc.pages
+                .iter()
+                .map(|page| page.image_resource_count)
+                .collect()
+        };
+        assert_eq!(counts(&counted), counts(&extracted));
+    }
+}
+
+fn shared_image_pdf(pages: usize) -> Vec<u8> {
+    let mut pixels = vec![0u8; 300 * 200 * 3];
+    for (index, value) in pixels.iter_mut().enumerate() {
+        *value = (index % 251) as u8;
+    }
+    let mut compressed =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    compressed.write_all(&pixels).unwrap();
+    let compressed = compressed.finish().unwrap();
+    let mut image = format!("<< /Type /XObject /Subtype /Image /Width 300 /Height 200 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n", compressed.len()).into_bytes();
+    image.extend_from_slice(&compressed);
+    image.extend_from_slice(b"\nendstream");
+    let content = b"q 300 0 0 200 0 0 cm /Shared Do Q";
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        Vec::new(),
+        image,
+        format!(
+            "<< /Length {} >>\nstream\n{}\nendstream",
+            content.len(),
+            std::str::from_utf8(content).unwrap()
+        )
+        .into_bytes(),
+    ];
+    let mut kids = Vec::new();
+    for _ in 0..pages {
+        objects.push(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Shared 3 0 R >> >> /Contents 4 0 R >>".to_vec());
+        kids.push(format!("{} 0 R", objects.len()));
+    }
+    objects[1] = format!(
+        "<< /Type /Pages /Count {pages} /Kids [{}] >>",
+        kids.join(" ")
+    )
+    .into_bytes();
+    pdf_from_objects(&objects)
+}
+
+#[test]
+fn an_image_shared_by_pages_is_one_file_per_page() {
+    let document = convert_pdf(
+        &shared_image_pdf(3),
+        Settings {
+            extract_images: true,
+            page_markers: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(document.images.len(), 3);
+    for (index, image) in document.images.iter().enumerate() {
+        assert_eq!(image.page, Some(index as u32 + 1));
+        assert_eq!(image.name, format!("page{}_object_3_0.png", index + 1));
+        assert_eq!(image.data, document.images[0].data);
+        assert!(document.markdown.contains(&image.name));
     }
 }

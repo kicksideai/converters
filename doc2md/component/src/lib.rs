@@ -85,6 +85,12 @@ fn sniff(blob: &[u8]) -> Format {
     }
 }
 
+// The PDF object behind a page resource id: "page3_object_12_0" -> "object_12_0".
+fn shared_object_key(id: &str) -> Option<&str> {
+    let (_, name) = id.strip_prefix("page")?.split_once('_')?;
+    name.starts_with("object_").then_some(name)
+}
+
 fn sanitize(id: &str) -> String {
     id.chars()
         .map(|c| {
@@ -163,7 +169,7 @@ fn strip_placeholders(markdown: &str) -> String {
 fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, ConversionError> {
     let blob = trim_pdf_trailer(blob);
     let options = unpdf::ParseOptions::new().with_resources(settings.extract_images);
-    let doc = unpdf::parse_bytes_with_options(blob, options)
+    let mut doc = unpdf::parse_bytes_with_options(blob, options)
         .map_err(|e| fail(ERR_PARSE, e.to_string()))?;
     let marker_style = if settings.page_markers {
         unpdf::PageMarkerStyle::Comment
@@ -181,22 +187,40 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
         });
     }
 
-    let mut keys: Vec<&String> = doc.resources.keys().collect();
-    keys.sort_by_key(|id| (doc.resources[*id].page, *id));
+    // Move the resources out of the document so encoded images are not copied.
+    let mut resources: Vec<(String, unpdf::Resource)> =
+        std::mem::take(&mut doc.resources).into_iter().collect();
+    resources.sort_by(|(a_id, a), (b_id, b)| (a.page, a_id).cmp(&(b.page, b_id)));
 
     let mut files: HashMap<String, String> = HashMap::new();
     let mut images: Vec<types::Image> = Vec::new();
-    for id in &keys {
-        let resource = &doc.resources[*id];
+    // Pages that paint the same PDF object get the same file bytes; encode it once.
+    let mut encoded: HashMap<String, (usize, &'static str)> = HashMap::new();
+    for (id, resource) in resources {
         if !resource.is_image() {
             continue;
         }
-        let Some((bytes, ext)) = pdf_image::image_file(resource) else {
-            continue;
+        let page = resource.page;
+        let object = shared_object_key(&id);
+        let (bytes, ext) = match object.and_then(|key| encoded.get(key)) {
+            Some(&(index, ext)) => (images[index].data.clone(), ext),
+            None => {
+                let Some((bytes, ext)) = pdf_image::image_file(resource) else {
+                    continue;
+                };
+                if let Some(key) = object {
+                    encoded.insert(key.to_owned(), (images.len(), ext));
+                }
+                (bytes, ext)
+            }
         };
-        let name = format!("{}.{}", sanitize(id), ext);
-        files.insert((*id).clone(), name.clone());
-        images.push(types::Image { name, data: bytes, page: resource.page });
+        let name = format!("{}.{}", sanitize(&id), ext);
+        files.insert(id, name.clone());
+        images.push(types::Image {
+            name,
+            data: bytes,
+            page,
+        });
     }
 
     let mut ordered: Vec<Option<String>> = Vec::new();
@@ -459,12 +483,14 @@ fn dispatch(
 fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError> {
     if bytes.starts_with(PDF_MAGIC) {
         let blob = trim_pdf_trailer(bytes);
-        let options = unpdf::ParseOptions::new().with_resources(true);
+        // Counting the images each page paints is enough; decoding them is not needed.
+        let options = unpdf::ParseOptions::new().with_resource_counts(true);
         let doc = unpdf::parse_bytes_with_options(blob, options)
             .map_err(|e| fail(ERR_PARSE, e.to_string()))?;
         let mut out = Vec::with_capacity(doc.pages.len());
+        let mut text = String::new();
         for page in &doc.pages {
-            let mut text = String::new();
+            text.clear();
             let mut image_blocks: u32 = 0;
             for block in &page.elements {
                 if matches!(block, unpdf::Block::Image { .. }) {
@@ -475,7 +501,9 @@ fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError
             out.push(PageInfo {
                 page: page.number,
                 text_len: text.trim().chars().count() as u32,
-                image_count: image_blocks.max(page.images.len() as u32).max(page.image_resource_count),
+                image_count: image_blocks
+                    .max(page.images.len() as u32)
+                    .max(page.image_resource_count),
             });
         }
         return Ok(out);
@@ -1099,12 +1127,18 @@ mod test_allocations {
     static ALLOCATOR: CountingAllocator = CountingAllocator;
     unsafe impl GlobalAlloc for CountingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            if ENABLED.try_with(Cell::get).unwrap_or(false) { COUNT.with(|n| n.set(n.get() + 1)); }
+            if ENABLED.try_with(Cell::get).unwrap_or(false) {
+                COUNT.with(|n| n.set(n.get() + 1));
+            }
             System.alloc(layout)
         }
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { System.dealloc(ptr, layout) }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            System.dealloc(ptr, layout)
+        }
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-            if ENABLED.try_with(Cell::get).unwrap_or(false) { COUNT.with(|n| n.set(n.get() + 1)); }
+            if ENABLED.try_with(Cell::get).unwrap_or(false) {
+                COUNT.with(|n| n.set(n.get() + 1));
+            }
             System.realloc(ptr, layout, size)
         }
     }
