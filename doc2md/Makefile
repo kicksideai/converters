@@ -53,6 +53,7 @@ test:
 load-test:
 	/usr/bin/time -v $(WIPPY) run -x app.env:doc2md_load_off
 	/usr/bin/time -v $(WIPPY) run -x app.env:doc2md_load_on
+	/usr/bin/time -v $(WIPPY) run -x app.env:doc2md_load_cmap
 
 publish-dry-run:
 	$(WIPPY) publish --dry-run --module-type library --module-display-name Doc2MD

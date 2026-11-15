@@ -4,7 +4,7 @@
 //! the concrete PDF parser from the layout analysis logic.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use crate::error::{Error, Result};
 use crate::model::{
@@ -1091,8 +1091,8 @@ impl RawBackend {
 // ---------------------------------------------------------------------------
 
 struct RawFontResolver {
-    cmap_cache: RwLock<HashMap<PageId, Option<ToUnicodeMap>>>,
-    encoding_cache: RwLock<HashMap<PageId, Option<HashMap<u8, char>>>>,
+    cmap_cache: RwLock<HashMap<PageId, Option<Arc<ToUnicodeMap>>>>,
+    encoding_cache: RwLock<HashMap<PageId, Option<Arc<HashMap<u8, char>>>>>,
     cid_system_info_cache: RwLock<HashMap<PageId, Option<(String, String)>>>,
 }
 
@@ -1242,7 +1242,11 @@ impl RawFontResolver {
     }
 
     /// Get or parse the ToUnicode CMap for a font.
-    fn get_to_unicode_map(&self, doc: &RawDocument, font_obj_id: PageId) -> Option<ToUnicodeMap> {
+    fn get_to_unicode_map(
+        &self,
+        doc: &RawDocument,
+        font_obj_id: PageId,
+    ) -> Option<Arc<ToUnicodeMap>> {
         {
             let cache = self.cmap_cache.read().unwrap();
             if let Some(cached) = cache.get(&font_obj_id) {
@@ -1250,7 +1254,7 @@ impl RawFontResolver {
             }
         }
 
-        let result = self.parse_font_to_unicode(doc, font_obj_id);
+        let result = self.parse_font_to_unicode(doc, font_obj_id).map(Arc::new);
         self.cmap_cache
             .write()
             .unwrap()
@@ -1353,7 +1357,11 @@ impl RawFontResolver {
     }
 
     /// Get or parse embedded TrueType cmap for Identity-H fonts.
-    fn get_embedded_cmap(&self, doc: &RawDocument, font_obj_id: PageId) -> Option<ToUnicodeMap> {
+    fn get_embedded_cmap(
+        &self,
+        doc: &RawDocument,
+        font_obj_id: PageId,
+    ) -> Option<Arc<ToUnicodeMap>> {
         let cid_font_id = self.get_cid_font_id(doc, font_obj_id)?;
 
         {
@@ -1363,7 +1371,9 @@ impl RawFontResolver {
             }
         }
 
-        let result = self.parse_embedded_truetype_cmap(doc, font_obj_id);
+        let result = self
+            .parse_embedded_truetype_cmap(doc, font_obj_id)
+            .map(Arc::new);
         self.cmap_cache
             .write()
             .unwrap()
@@ -1418,7 +1428,7 @@ impl RawFontResolver {
         &self,
         doc: &RawDocument,
         font_obj_id: PageId,
-    ) -> Option<HashMap<u8, char>> {
+    ) -> Option<Arc<HashMap<u8, char>>> {
         {
             let cache = self.encoding_cache.read().unwrap();
             if let Some(cached) = cache.get(&font_obj_id) {
@@ -1426,7 +1436,7 @@ impl RawFontResolver {
             }
         }
 
-        let result = self.parse_encoding_dict(doc, font_obj_id);
+        let result = self.parse_encoding_dict(doc, font_obj_id).map(Arc::new);
         self.encoding_cache
             .write()
             .unwrap()
@@ -2574,8 +2584,7 @@ endbfrange";
         assert_eq!(backend.decode_text((3, 0), b"F1", &[0, 1, 1, 0]), "A");
     }
 
-    #[test]
-    fn test_decode_text_nul_embedded_cmap() {
+    fn embedded_cmap_backend() -> RawBackend {
         // Minimal TrueType table with format 12 groups: U+0000 -> GID 1, A -> GID 2.
         let mut font = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         font.extend_from_slice(b"cmap");
@@ -2589,18 +2598,62 @@ endbfrange";
             font.extend_from_slice(&value.to_be_bytes());
         }
         let hex: String = font.iter().map(|b| format!("{b:02X}")).collect();
-        let backend = text_backend(
+        text_backend(
             "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [5 0 R] >>",
             &[
                 "<< /Type /Font /Subtype /CIDFontType2 /FontDescriptor 6 0 R /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 0 >> >>".into(),
                 "<< /Type /FontDescriptor /FontFile2 7 0 R >>".into(),
                 format!("<< /Length {} /Filter /ASCIIHexDecode >>\nstream\n{hex}>\nendstream", hex.len() + 1),
             ],
-        );
+        )
+    }
+
+    #[test]
+    fn test_decode_text_nul_embedded_cmap() {
+        let backend = embedded_cmap_backend();
         assert_eq!(backend.decode_text((3, 0), b"F1", &[0, 1]), "");
         assert_eq!(
             backend.decode_text((3, 0), b"F1", &[0, 2, 0, 1, 0, 2]),
             "AA"
+        );
+    }
+
+    fn same_value<T, B: std::borrow::Borrow<T>>(first: &B, second: &B) -> bool {
+        std::ptr::eq(first.borrow(), second.borrow())
+    }
+
+    #[test]
+    fn font_caches_share_one_decoded_map_across_lookups() {
+        let backend = tounicode_backend(
+            "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0042> endbfchar",
+        );
+        let fonts = &backend.font_resolver;
+        let first = fonts.get_to_unicode_map(&backend.doc, (4, 0)).unwrap();
+        let second = fonts.get_to_unicode_map(&backend.doc, (4, 0)).unwrap();
+        assert!(
+            same_value::<ToUnicodeMap, _>(&first, &second),
+            "DOC2MD-CMAP-CLONE: ToUnicode lookups share the cached map"
+        );
+
+        let backend = embedded_cmap_backend();
+        let fonts = &backend.font_resolver;
+        let first = fonts.get_embedded_cmap(&backend.doc, (4, 0)).unwrap();
+        let second = fonts.get_embedded_cmap(&backend.doc, (4, 0)).unwrap();
+        assert!(
+            same_value::<ToUnicodeMap, _>(&first, &second),
+            "DOC2MD-CMAP-CLONE: embedded cmap lookups share the cached map"
+        );
+
+        let backend = text_backend(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /B] >> >>",
+            &[],
+        );
+        let fonts = &backend.font_resolver;
+        let first = fonts.get_encoding_map(&backend.doc, (4, 0)).unwrap();
+        let second = fonts.get_encoding_map(&backend.doc, (4, 0)).unwrap();
+        assert!(
+            same_value::<HashMap<u8, char>, _>(&first, &second),
+            "DOC2MD-CMAP-CLONE: encoding lookups share the cached map"
         );
     }
 

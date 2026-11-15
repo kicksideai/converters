@@ -174,3 +174,16 @@ all objects, including compressed objects. `RawDocument::pages` and
 and streaming therefore reuse the same map without cloning it or walking the
 page tree for each page. A generated 1,025-page regression counts tree walks
 across per-page parsing and requires exactly one walk per document.
+
+### 9. Shared Font Decode Maps (`src/parser/backend.rs`, `src/parser/font.rs`)
+
+Upstream `RawFontResolver` caches each font's ToUnicode CMap, embedded TrueType
+cmap, and encoding map, but returns a deep copy of the cached map on every lookup.
+`decode_text` performs that lookup for each text-show operator, so a page of short
+runs through a font with a large CMap copies the whole map once per run.
+
+The caches hold `Arc` values and lookups return the shared `Arc`. `ToUnicodeMap`
+no longer implements `Clone`, so a decode cannot copy a CMap. A backend
+regression asserts that repeated ToUnicode, embedded cmap, and encoding lookups
+return the same cached value. Component tests convert and scan a generated
+document whose font maps 60,000 two-byte codes across 10,000 text runs.
