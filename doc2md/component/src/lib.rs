@@ -194,22 +194,25 @@ fn convert_pdf(blob: &[u8], settings: Settings) -> Result<types::Converted, Conv
 
     let mut files: HashMap<String, String> = HashMap::new();
     let mut images: Vec<types::Image> = Vec::new();
-    // Pages that paint the same PDF object get the same file bytes; encode it once.
-    let mut encoded: HashMap<String, (usize, &'static str)> = HashMap::new();
+    // A named color space can resolve differently on each page.
+    let mut encoded: HashMap<String, (Option<unpdf::SampleLayout>, usize, &'static str)> = HashMap::new();
     for (id, resource) in resources {
         if !resource.is_image() {
             continue;
         }
         let page = resource.page;
         let object = shared_object_key(&id);
-        let (bytes, ext) = match object.and_then(|key| encoded.get(key)) {
-            Some(&(index, ext)) => (images[index].data.clone(), ext),
+        let cached = object.and_then(|key| encoded.get(key))
+            .filter(|(samples, _, _)| samples == &resource.samples);
+        let (bytes, ext) = match cached {
+            Some(&(_, index, ext)) => (images[index].data.clone(), ext),
             None => {
+                let samples = resource.samples.clone();
                 let Some((bytes, ext)) = pdf_image::image_file(resource) else {
                     continue;
                 };
                 if let Some(key) = object {
-                    encoded.insert(key.to_owned(), (images.len(), ext));
+                    encoded.insert(key.to_owned(), (samples, images.len(), ext));
                 }
                 (bytes, ext)
             }

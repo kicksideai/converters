@@ -1,4 +1,4 @@
-.PHONY: help wippy build-component install lint test check clean
+.PHONY: help wippy build-component install lint test test-component check clean
 
 RUNTIME_DIR ?= ../runtime
 OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
@@ -29,7 +29,7 @@ wippy:
 
 build-component:
 	rustup target add wasm32-wasip2
-	cd component && RUSTFLAGS="$(RUSTFLAGS) -C target-feature=+simd128 --remap-path-prefix=$(CURDIR)=/source --remap-path-prefix=$(or $(CARGO_HOME),$(HOME)/.cargo)=/cargo --remap-path-prefix=$$(rustc --print sysroot)/lib/rustlib/src/rust=/rustc/$$(rustc -vV | sed -n "s/^commit-hash: //p")" cargo build --release --target wasm32-wasip2
+	cd component && RUSTFLAGS="$(RUSTFLAGS) --remap-path-prefix=$(CURDIR)=/source --remap-path-prefix=$(or $(CARGO_HOME),$(HOME)/.cargo)=/cargo --remap-path-prefix=$$(rustc --print sysroot)/lib/rustlib/src/rust=/rustc/$$(rustc -vV | sed -n "s/^commit-hash: //p")" cargo build --release --target wasm32-wasip2
 	@mkdir -p $(dir $(WASM_DST))
 	cp $(WASM_SRC) $(WASM_DST)
 	@HASH=$$(shasum -a 256 $(WASM_DST) | cut -d' ' -f1); \
@@ -42,7 +42,10 @@ install:
 lint:
 	$(WIPPY) lint $(WIPPY_LINT_ARGS) --level error
 
-test:
+test-component:
+	cd component && cargo test --release
+
+test: test-component
 	$(WIPPY) test $(WIPPY_TEST_ARGS)
 
 check: build-component lint test

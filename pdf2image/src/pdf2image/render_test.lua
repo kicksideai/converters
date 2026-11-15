@@ -26,6 +26,11 @@ local function is_webp(blob)
         and blob:sub(9, 12) == "WEBP"
 end
 
+local function png_dimensions(blob)
+    local width, height = string.unpack(">I4I4", blob, 17)
+    return width, height
+end
+
 local function open_ok(blob)
     local doc, err = pdf2image.open({ bytes = blob })
     test.is_nil(err)
@@ -98,6 +103,31 @@ local function define()
                 test.eq(is_png(png), true)
                 test.eq(#png > 100, true)
             end
+        end)
+
+        test.it("preserves panoramic dimensions within the renderer limit", function()
+            for _, size in ipairs({
+                {14400, 144, 8, 655}, {144, 14400, 8, 655},
+                {65527, 144, 1, 144}, {65531, 144, 1, 143},
+            }) do
+                local doc = open_ok(fixtures.page(size[1], size[2]))
+                local png, err = doc.to_image(1, {scale = size[3], format = "png"})
+                test.is_nil(err)
+                if png == nil then error("expected PNG bytes") end
+                local width, height = png_dimensions(png)
+                test.eq(math.max(width, height), 65527)
+                test.eq(math.min(width, height), size[4])
+            end
+        end)
+
+        test.it("keeps in-budget floored output dimensions", function()
+            local doc = open_ok(fixtures.page(8192.9, 8192.1))
+            local png, err = doc.to_image(1, {scale = 1, format = "png"})
+            test.is_nil(err)
+            if png == nil then error("expected PNG bytes") end
+            local width, height = png_dimensions(png)
+            test.eq(width, 8192)
+            test.eq(height, 8192)
         end)
 
         test.it("honours an explicit DPI option", function()
