@@ -7,7 +7,7 @@ LITEHTML_COMMIT=d96c0209f15624c3d3c82aa81c36032e87602cd9
 WASIP2CC=/opt/wasi-sdk/bin/wasm32-wasip2-clang
 WASIP2CXX=/opt/wasi-sdk/bin/wasm32-wasip2-clang++
 TOOLCHAIN=/opt/wasi-sdk/share/cmake/wasi-sdk-p2.cmake
-NOEXC="-fno-exceptions"
+NOEXC="-fno-exceptions -msimd128"
 
 cd /work/component
 
@@ -34,7 +34,7 @@ cmake -S third_party/libharu -B build/libharu \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
     -DLIBHPDF_SHARED=OFF -DLIBHPDF_STATIC=ON -DLIBHPDF_EXAMPLES=OFF \
-    -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=ON -DCMAKE_DISABLE_FIND_PACKAGE_PNG=ON >/dev/null
+    -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=ON -DCMAKE_DISABLE_FIND_PACKAGE_PNG=ON -DCMAKE_C_FLAGS=-msimd128 >/dev/null
 cmake --build build/libharu -j"$(nproc)" >/dev/null
 HPDF_LIB=$(find build/libharu -name 'libhpdf*.a' | head -1)
 HPDF_INC_SRC=third_party/libharu/include
@@ -53,9 +53,9 @@ GUMBO_A=$(find build/litehtml -name 'libgumbo.a' | head -1)
 
 echo "=== compile + link component ==="
 rm -rf build/obj && mkdir -p build/obj
-"${WASIP2CC}" -O3 -I gen -c gen/html2pdf.c -o build/obj/bindings.o
-"${WASIP2CC}" -O3 -std=c23 --embed-dir=. -c src/fonts.c -o build/obj/fonts.o
-"${WASIP2CXX}" -O3 ${NOEXC} -std=c++17 -Wl,--no-entry \
+"${WASIP2CC}" -O3 -msimd128 -I gen -c gen/html2pdf.c -o build/obj/bindings.o
+"${WASIP2CC}" -O3 -msimd128 -std=c23 --embed-dir=. -c src/fonts.c -o build/obj/fonts.o
+"${WASIP2CXX}" -O3 -msimd128 ${NOEXC} -std=c++17 -Wl,--no-entry \
     -I gen -I src -I "${HPDF_INC_SRC}" -I "${HPDF_INC_GEN}" \
     -I third_party/litehtml/include -I third_party/litehtml/include/litehtml \
     src/render.cpp src/pdf_container.cpp \
