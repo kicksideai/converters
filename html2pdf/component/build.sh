@@ -14,7 +14,7 @@ cd /work/component
 if [ ! -d third_party/libharu ]; then
     git clone --depth 1 --branch "${LIBHARU_TAG}" https://github.com/libharu/libharu.git third_party/libharu
     git -C third_party/libharu apply /work/component/patches/libharu-tounicode-cmap.patch
-    git -C third_party/libharu apply /work/component/patches/libharu-glyphid-binary-search.patch
+    git -C third_party/libharu apply /work/component/patches/libharu-cid-font-tables.patch
 fi
 
 if [ ! -d third_party/litehtml ]; then
