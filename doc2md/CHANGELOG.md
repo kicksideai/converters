@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.28](https://github.com/kicksideai/converters/compare/doc2md-v0.8.27...doc2md-v0.8.28) (2026-11-16)
+
+
+### Bug Fixes
+
+* declare WASM limits at options.limits ([#46](https://github.com/kicksideai/converters/issues/46)) ([c4dc65b](https://github.com/kicksideai/converters/commit/c4dc65b1c1d1e8821716efbfd47a21f3144a1d70))
+
 ## [0.8.27](https://github.com/kicksideai/converters/compare/doc2md-v0.8.26...doc2md-v0.8.27) (2026-11-16)
 
 
