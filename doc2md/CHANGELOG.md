@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.27](https://github.com/kicksideai/converters/compare/doc2md-v0.8.26...doc2md-v0.8.27) (2026-11-16)
+
+
+### Performance Improvements
+
+* build the converters with WebAssembly SIMD ([38313e0](https://github.com/kicksideai/converters/commit/38313e009d1734ef6ab4ecbdfcf7dfead57d0130))
+
 ## [0.8.26](https://github.com/kicksideai/converters/compare/doc2md-v0.8.25...doc2md-v0.8.26) (2026-11-16)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.10](https://github.com/kicksideai/converters/compare/html2pdf-v0.6.9...html2pdf-v0.6.10) (2026-11-16)
+
+
+### Performance Improvements
+
+* build the converters with WebAssembly SIMD ([38313e0](https://github.com/kicksideai/converters/commit/38313e009d1734ef6ab4ecbdfcf7dfead57d0130))
+
 ## [0.6.9](https://github.com/kicksideai/converters/compare/html2pdf-v0.6.8...html2pdf-v0.6.9) (2026-11-15)
 
 
