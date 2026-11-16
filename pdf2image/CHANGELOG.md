@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.18](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.17...pdf2image-v0.7.18) (2026-11-16)
+
+
+### Performance Improvements
+
+* build the converters with WebAssembly SIMD ([38313e0](https://github.com/kicksideai/converters/commit/38313e009d1734ef6ab4ecbdfcf7dfead57d0130))
+
 ## [0.7.17](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.16...pdf2image-v0.7.17) (2026-11-15)
 
 
