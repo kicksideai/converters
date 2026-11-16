@@ -30,8 +30,9 @@ entries:
     pool:
       type: inline
     # Safety net for a hung call; callers own the effective processing budget.
-    limits:
-      max_execution_ms: 600000
+    options:
+      limits:
+        max_execution_ms: 600000
 
   - name: page_resources
     kind: function.wasm
@@ -49,8 +50,9 @@ entries:
       type: inline
     # Per-call kill deadline for a hung per-page resource scan; metadata-only call.
     # Overridable per deploy like pool settings.
-    limits:
-      max_execution_ms: 15000
+    options:
+      limits:
+        max_execution_ms: 15000
 
   - name: doc2md
     kind: library.lua
