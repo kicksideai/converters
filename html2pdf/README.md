@@ -26,8 +26,9 @@ and clips overflow.
 
 ## Requirements
 
-Wippy 0.3.x. Use current Hub
-dependencies for the contracts declared by the module.
+Wippy 0.3.63a or later: the component uses WebAssembly SIMD (SIMD128), which
+earlier runtimes fail to load. Use current Hub dependencies for the contracts
+declared by the module.
 The converter has no SQL persistence; SQLite and PostgreSQL are host choices.
 To rebuild WASM, install Docker for the checked-in wasi-sdk toolchain. Make and Python 3 support build and staging.
 
