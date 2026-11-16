@@ -107,7 +107,7 @@ jobs:
         node-version: '22'
     - uses: kicksideai/.github/actions/setup-wippy@5401fa65bed7d8648125957520e94206ed1ffd0b
       with:
-        version: 0.3.63a
+        version: 0.3.64a
         hub-url: https://hub.wippy.ai
     - name: Build, lint and Lua module tests
       run: ${{ matrix.commands }}
