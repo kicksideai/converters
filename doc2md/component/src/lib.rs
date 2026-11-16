@@ -494,19 +494,13 @@ fn collect_page_resources(bytes: &[u8]) -> Result<Vec<PageInfo>, ConversionError
         let mut text = String::new();
         for page in &doc.pages {
             text.clear();
-            let mut image_blocks: u32 = 0;
             for block in &page.elements {
-                if matches!(block, unpdf::Block::Image { .. }) {
-                    image_blocks += 1;
-                }
                 block.append_plain_text(&mut text);
             }
             out.push(PageInfo {
                 page: page.number,
                 text_len: text.trim().chars().count() as u32,
-                image_count: image_blocks
-                    .max(page.images.len() as u32)
-                    .max(page.image_resource_count),
+                image_count: page.image_resource_count,
             });
         }
         return Ok(out);

@@ -2420,6 +2420,41 @@ mod tests {
     }
 
     #[test]
+    fn image_counts_follow_painted_content_without_decoding() {
+        use std::sync::atomic::Ordering;
+        let backend = painted_pdf(
+            "/XObject << /I 5 0 R /J 5 0 R /Fm 6 0 R >> /Pattern << /P 8 0 R >>",
+            "q /I Do Q q /J Do Q /Fm Do BI /W 1 /H 1 /CS /G /BPC 8 ID z EI /Pattern cs /P scn 0 0 10 10 re f",
+            vec![
+                stream_object(TEST_IMAGE, "z"),
+                stream_object(
+                    "/Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im 7 0 R >> >>",
+                    "/Im Do /Im Do",
+                ),
+                stream_object(TEST_IMAGE, "y"),
+                stream_object("/PatternType 1 /Resources << /XObject << /Im 5 0 R >> >>", "/Im Do"),
+            ],
+        );
+        let extracted = super::super::pdf_parser::parse_single_page(
+            &backend, 1, &super::super::ParseOptions::new().with_resources(true),
+        ).unwrap();
+        let decodes = backend.image_decodes.load(Ordering::Relaxed);
+        assert!(decodes > 0);
+        let counted = super::super::pdf_parser::parse_single_page(
+            &backend, 1, &super::super::ParseOptions::new().with_resource_counts(true),
+        ).unwrap();
+        assert_eq!(counted.image_resource_count, extracted.image_resource_count);
+        assert_eq!(counted.image_resource_count, 8);
+        assert!(counted.extracted_resources.is_empty());
+        assert!(counted.images.is_empty());
+        assert_eq!(
+            backend.image_decodes.load(Ordering::Relaxed),
+            decodes,
+            "DOC2MD-PAGE-COUNT-DECODE: image counts decode no image samples"
+        );
+    }
+
+    #[test]
     fn shared_scan_resources_decode_once_per_painted_image_per_page() {
         use std::sync::atomic::Ordering;
         let pages = 8;
