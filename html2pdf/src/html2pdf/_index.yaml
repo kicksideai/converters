@@ -32,8 +32,9 @@ entries:
       type: inline
     # Per-call kill deadline for a hung whole-document HTML to PDF render.
     # Overridable per deploy like pool settings.
-    limits:
-      max_execution_ms: 90000
+    options:
+      limits:
+        max_execution_ms: 90000
 
   - name: html2pdf
     kind: library.lua

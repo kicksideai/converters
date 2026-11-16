@@ -34,8 +34,9 @@ entries:
       max_size: 4
     # Per-call kill deadline for a hung page-count; this is a metadata-only call.
     # Overridable per deploy like pool.max_size.
-    limits:
-      max_execution_ms: 15000
+    options:
+      limits:
+        max_execution_ms: 15000
 
   - name: render
     kind: function.wasm
@@ -56,8 +57,9 @@ entries:
       max_size: 4
     # Per-call kill deadline for a hung render; each call is one page batch.
     # Overridable per deploy like pool.max_size.
-    limits:
-      max_execution_ms: 45000
+    options:
+      limits:
+        max_execution_ms: 45000
 
   - name: pdf2image
     kind: library.lua
