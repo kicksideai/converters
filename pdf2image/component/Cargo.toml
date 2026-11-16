@@ -12,12 +12,13 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.58"
 hayro = "0.7"
 bytemuck = "1"
+png = "0.18"
 image = { version = "0.25", default-features = false, features = ["jpeg", "webp"] }
 
 [patch.crates-io]
 hayro-interpret = { path = "vendor/hayro-interpret" }
 
 [profile.release]
-opt-level = "s"
+opt-level = 3
 strip = true
 lto = true

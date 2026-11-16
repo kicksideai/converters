@@ -47,8 +47,8 @@ pub struct PageStreamOptions {
     pub error_mode: ErrorMode,
     pub extract_mode: ExtractMode,
     pub extract_resources: bool,
-    /// Counts painted images without extracting them. See `ParseOptions`.
-    pub count_images: bool,
+    /// See [`ParseOptions::count_resources`].
+    pub count_resources: bool,
     /// 장식용 작은 이미지를 걸러내는 픽셀 임계값. `ParseOptions` 참고.
     pub min_image_dimension: u32,
     pub pages: PageSelection,
@@ -68,7 +68,7 @@ impl Default for PageStreamOptions {
             error_mode: ErrorMode::Lenient,
             extract_mode: ExtractMode::Full,
             extract_resources: false,
-            count_images: false,
+            count_resources: false,
             min_image_dimension: 64,
             pages: PageSelection::All,
             password: None,
@@ -89,7 +89,7 @@ impl From<&ParseOptions> for PageStreamOptions {
             error_mode: o.error_mode,
             extract_mode: o.extract_mode,
             extract_resources: o.extract_resources,
-            count_images: o.count_images,
+            count_resources: o.count_resources,
             min_image_dimension: o.min_image_dimension,
             pages: o.pages.clone(),
             password: o.password.clone(),
@@ -275,7 +275,7 @@ where
         error_mode: opts.error_mode,
         extract_mode: opts.extract_mode,
         extract_resources: opts.extract_resources,
-        count_images: opts.count_images,
+        count_resources: opts.count_resources,
         min_image_dimension: opts.min_image_dimension,
         pages: opts.pages.clone(),
         password: opts.password.clone(),

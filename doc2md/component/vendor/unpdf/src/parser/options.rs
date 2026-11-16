@@ -18,10 +18,9 @@ pub struct ParseOptions {
     /// `.with_resources(true)` when images are needed.
     pub extract_resources: bool,
 
-    /// Whether to count each page's painted images into
-    /// `Page::image_resource_count` without extracting them. Resource
-    /// extraction always sets the count.
-    pub count_images: bool,
+    /// Whether to count the images each page paints without decoding them.
+    /// Fills `Page::image_resource_count` only; `extract_resources` takes precedence.
+    pub count_resources: bool,
 
     /// Minimum pixel dimension for extracted images. Images whose width
     /// OR height falls below this threshold are dropped as decorative
@@ -75,9 +74,9 @@ impl ParseOptions {
         self
     }
 
-    /// Enable or disable painted-image counts without resource extraction.
-    pub fn with_image_counts(mut self, count: bool) -> Self {
-        self.count_images = count;
+    /// Enable or disable counting page images without decoding them.
+    pub fn with_resource_counts(mut self, count: bool) -> Self {
+        self.count_resources = count;
         self
     }
 
@@ -119,7 +118,7 @@ impl Default for ParseOptions {
             error_mode: ErrorMode::Lenient,
             extract_mode: ExtractMode::Full,
             extract_resources: false,
-            count_images: false,
+            count_resources: false,
             min_image_dimension: 64,
             parallel: true,
             pages: PageSelection::All,

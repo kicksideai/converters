@@ -46,6 +46,26 @@ pub(crate) struct ToUnicodeMap {
     pub(crate) code_width: usize,
     /// Character code → Unicode string mapping.
     pub(crate) mappings: HashMap<u32, String>,
+    /// Simple-form `bfrange` entries, sorted and disjoint. A code that is also in
+    /// `mappings` uses the `mappings` entry.
+    ranges: Vec<CodeRange>,
+}
+
+/// A simple-form `bfrange` entry kept as a range instead of one string per code.
+#[derive(Debug, Clone, Copy)]
+struct CodeRange {
+    lo: u32,
+    hi: u32,
+    dst: u32,
+    /// Position of the entry among the `bfrange` writes; later writes win.
+    order: u32,
+}
+
+impl CodeRange {
+    /// The character this range maps `code` to, when the mapping is usable.
+    fn char_for(&self, code: u32) -> Option<char> {
+        char::from_u32(self.dst.checked_add(code - self.lo)?).filter(|&c| usable_char(c))
+    }
 }
 
 impl ToUnicodeMap {
@@ -56,20 +76,39 @@ impl ToUnicodeMap {
         while i < bytes.len() {
             if self.code_width == 2 && i + 1 < bytes.len() {
                 let code = u32::from(bytes[i]) << 8 | u32::from(bytes[i + 1]);
-                if let Some(s) = self.mappings.get(&code) {
-                    result.push_str(s);
-                }
+                self.push_mapping(code, &mut result);
                 // If unmapped, skip silently (common for space/control chars)
                 i += 2;
             } else {
                 let code = u32::from(bytes[i]);
-                if let Some(s) = self.mappings.get(&code) {
-                    result.push_str(s);
-                }
+                self.push_mapping(code, &mut result);
                 i += 1;
             }
         }
         result
+    }
+
+    fn push_mapping(&self, code: u32, out: &mut String) {
+        if let Some(s) = self.mappings.get(&code) {
+            out.push_str(s);
+        } else if let Some(c) = self.range_char(code) {
+            out.push(c);
+        }
+    }
+
+    fn range_char(&self, code: u32) -> Option<char> {
+        let index = self.ranges.partition_point(|range| range.hi < code);
+        let range = self.ranges.get(index).filter(|range| range.lo <= code)?;
+        range.char_for(code)
+    }
+
+    /// The Unicode text for `code`, as `decode` produces it.
+    #[cfg(test)]
+    pub(crate) fn lookup(&self, code: u32) -> Option<String> {
+        self.mappings
+            .get(&code)
+            .cloned()
+            .or_else(|| self.range_char(code).map(String::from))
     }
 }
 
@@ -90,38 +129,34 @@ fn next_angle_token(s: &str) -> Option<(&str, &str)> {
 /// indicate "no mapping" (U+FFFF, U+FFFE, U+FFFD).
 /// Also drops other noncharacters (U+FDD0..U+FDEF, U+xFFFE, U+xFFFF).
 fn sanitize_unicode(s: String) -> Option<String> {
-    let filtered: String = s
-        .chars()
-        .filter(|&c| {
-            let cp = c as u32;
-            if cp == 0xFFFD || cp == 0xFFFE || cp == 0xFFFF {
-                return false;
-            }
-            if (0xFDD0..=0xFDEF).contains(&cp) {
-                return false;
-            }
-            // Plane-specific noncharacters: U+xFFFE and U+xFFFF for any plane
-            if cp >= 0x10000 && (cp & 0xFFFF) >= 0xFFFE {
-                return false;
-            }
-            // Private Use Area — PDF producers (notably Hancom) sometimes map
-            // bullet/custom glyphs to PUA codepoints via the embedded TrueType
-            // cmap. These render as tofu in markdown; treat them as unmapped.
-            // Supplementary PUA planes are also dropped.
-            if (0xE000..=0xF8FF).contains(&cp)
-                || (0xF0000..=0xFFFFD).contains(&cp)
-                || (0x100000..=0x10FFFD).contains(&cp)
-            {
-                return false;
-            }
-            true
-        })
-        .collect();
+    let filtered: String = s.chars().filter(|&c| usable_char(c)).collect();
     if filtered.is_empty() {
         None
     } else {
         Some(filtered)
     }
+}
+
+/// Whether a mapped character is kept; see [`sanitize_unicode`].
+fn usable_char(c: char) -> bool {
+    let cp = c as u32;
+    if cp == 0xFFFD || cp == 0xFFFE || cp == 0xFFFF {
+        return false;
+    }
+    if (0xFDD0..=0xFDEF).contains(&cp) {
+        return false;
+    }
+    // Plane-specific noncharacters: U+xFFFE and U+xFFFF for any plane
+    if cp >= 0x10000 && (cp & 0xFFFF) >= 0xFFFE {
+        return false;
+    }
+    // Private Use Area — PDF producers (notably Hancom) sometimes map
+    // bullet/custom glyphs to PUA codepoints via the embedded TrueType
+    // cmap. These render as tofu in markdown; treat them as unmapped.
+    // Supplementary PUA planes are also dropped.
+    !((0xE000..=0xF8FF).contains(&cp)
+        || (0xF0000..=0xFFFFD).contains(&cp)
+        || (0x100000..=0x10FFFD).contains(&cp))
 }
 
 /// Decode a hex string into a Unicode string.
@@ -152,6 +187,10 @@ fn hex_to_unicode(hex: &str) -> Option<String> {
 pub(crate) fn parse_to_unicode_cmap(data: &[u8]) -> Option<ToUnicodeMap> {
     let text = String::from_utf8_lossy(data);
     let mut mappings = HashMap::new();
+    let mut ranges: Vec<CodeRange> = Vec::new();
+    // Write order of the bfrange entries; bfchar entries are order 0.
+    let mut mapping_order: HashMap<u32, u32> = HashMap::new();
+    let mut order: u32 = 0;
     let mut code_width: usize = 2; // default for Identity-H
 
     // Parse codespace range to determine code width
@@ -249,10 +288,12 @@ pub(crate) fn parse_to_unicode_cmap(data: &[u8]) -> Option<ToUnicodeMap> {
                         unicodes.push(h);
                         scan = r;
                     }
+                    order += 1;
                     for (i, code) in (lo..=hi).enumerate() {
                         if let Some(uni_hex) = unicodes.get(i) {
                             if let Some(unicode_str) = hex_to_unicode(uni_hex) {
                                 mappings.insert(code, unicode_str);
+                                mapping_order.insert(code, order);
                             }
                         }
                     }
@@ -271,13 +312,16 @@ pub(crate) fn parse_to_unicode_cmap(data: &[u8]) -> Option<ToUnicodeMap> {
                         }
                     };
                     rest = r;
-                    for (i, code) in (lo..=hi).enumerate() {
-                        let dst = dst_start + i as u32;
-                        if let Some(c) = char::from_u32(dst) {
-                            if let Some(s) = sanitize_unicode(c.to_string()) {
-                                mappings.insert(code, s);
-                            }
-                        }
+                    order += 1;
+                    // An identity CMap covers the whole BMP in a few ranges; keep
+                    // them as ranges instead of one string per code.
+                    if lo <= hi {
+                        ranges.push(CodeRange {
+                            lo,
+                            hi,
+                            dst: dst_start,
+                            order,
+                        });
                     }
                 }
             }
@@ -287,7 +331,16 @@ pub(crate) fn parse_to_unicode_cmap(data: &[u8]) -> Option<ToUnicodeMap> {
         }
     }
 
-    if mappings.is_empty() {
+    resolve_range_order(&mut mappings, &mut ranges, &mapping_order);
+    let max_range_code = ranges
+        .iter()
+        .filter_map(|range| {
+            (range.lo..=range.hi)
+                .rev()
+                .find(|&code| range.char_for(code).is_some())
+        })
+        .max();
+    if mappings.is_empty() && max_range_code.is_none() {
         return None;
     }
 
@@ -296,7 +349,12 @@ pub(crate) fn parse_to_unicode_cmap(data: &[u8]) -> Option<ToUnicodeMap> {
     // actually only use single-byte codes (max key <= 0xFF). This is common
     // for Type1 fonts with custom encodings.
     if code_width == 2 {
-        let max_key = mappings.keys().copied().max().unwrap_or(0);
+        let max_key = mappings
+            .keys()
+            .copied()
+            .chain(max_range_code)
+            .max()
+            .unwrap_or(0);
         if max_key <= 0xFF {
             code_width = 1;
         }
@@ -305,7 +363,41 @@ pub(crate) fn parse_to_unicode_cmap(data: &[u8]) -> Option<ToUnicodeMap> {
     Some(ToUnicodeMap {
         code_width,
         mappings,
+        ranges,
     })
+}
+
+/// Apply "the last `bfchar`/`bfrange` write wins" across `mappings` and `ranges`.
+/// `bfchar` entries have order 0. Overlapping ranges are expanded in write order.
+fn resolve_range_order(
+    mappings: &mut HashMap<u32, String>,
+    ranges: &mut Vec<CodeRange>,
+    mapping_order: &HashMap<u32, u32>,
+) {
+    ranges.sort_by_key(|range| (range.lo, range.hi));
+    if ranges.windows(2).any(|pair| pair[0].hi >= pair[1].lo) {
+        let mut order = mapping_order.clone();
+        let mut by_order = std::mem::take(ranges);
+        by_order.sort_by_key(|range| range.order);
+        for range in by_order {
+            for code in range.lo..=range.hi {
+                if let Some(c) = range.char_for(code) {
+                    if order.get(&code).copied().unwrap_or(0) < range.order {
+                        mappings.insert(code, c.to_string());
+                        order.insert(code, range.order);
+                    }
+                }
+            }
+        }
+        return;
+    }
+    mappings.retain(|&code, _| {
+        let written = mapping_order.get(&code).copied().unwrap_or(0);
+        let index = ranges.partition_point(|range| range.hi < code);
+        !ranges.get(index).is_some_and(|range| {
+            range.lo <= code && range.order > written && range.char_for(code).is_some()
+        })
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +527,7 @@ pub(crate) fn parse_truetype_cmap_table(data: &[u8]) -> Option<ToUnicodeMap> {
     Some(ToUnicodeMap {
         code_width: 2, // Identity-H always uses 2-byte codes
         mappings: gid_to_unicode,
+        ranges: Vec::new(),
     })
 }
 
@@ -666,9 +759,9 @@ endcodespacerange
 endbfrange";
         let map = parse_to_unicode_cmap(cmap).unwrap();
         assert_eq!(map.code_width, 1);
-        assert_eq!(map.mappings.get(&0x20), Some(&" ".to_string()));
-        assert_eq!(map.mappings.get(&0x41), Some(&"A".to_string()));
-        assert_eq!(map.mappings.get(&0x7E), Some(&"~".to_string()));
+        assert_eq!(map.lookup(0x20), Some(" ".to_string()));
+        assert_eq!(map.lookup(0x41), Some("A".to_string()));
+        assert_eq!(map.lookup(0x7E), Some("~".to_string()));
     }
 
     #[test]
@@ -726,10 +819,72 @@ endbfchar";
         let cmap = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 2 beginbfrange <0020> <0021> <0041> <0030> <0039> <0030> endbfrange endcmap";
         let map = parse_to_unicode_cmap(cmap).unwrap();
         // Range 1: <0020>-<0021> starting at U+0041 → A, B
-        assert_eq!(map.mappings.get(&0x0020), Some(&"A".to_string()));
-        assert_eq!(map.mappings.get(&0x0021), Some(&"B".to_string()));
+        assert_eq!(map.lookup(0x0020), Some("A".to_string()));
+        assert_eq!(map.lookup(0x0021), Some("B".to_string()));
         // Range 2: <0030>-<0039> starting at U+0030 → 0..9
-        assert_eq!(map.mappings.get(&0x0030), Some(&"0".to_string()));
-        assert_eq!(map.mappings.get(&0x0039), Some(&"9".to_string()));
+        assert_eq!(map.lookup(0x0030), Some("0".to_string()));
+        assert_eq!(map.lookup(0x0039), Some("9".to_string()));
+    }
+
+    #[test]
+    fn identity_bmp_ranges_decode_without_expanding() {
+        let mut cmap = String::from(
+            "1 begincodespacerange <0000> <ffff> endcodespacerange 100 beginbfrange\n",
+        );
+        for high in 0..=0xFFu32 {
+            cmap.push_str(&format!("<{0:02x}00> <{0:02x}ff> <{0:02x}00>\n", high));
+        }
+        cmap.push_str("endbfrange");
+        let map = parse_to_unicode_cmap(cmap.as_bytes()).unwrap();
+        assert_eq!(map.code_width, 2);
+        assert!(map.mappings.is_empty(), "ranges stay ranges");
+        assert_eq!(
+            map.decode(&[0x00, 0x48, 0x00, 0x69, 0xAC, 0x00]),
+            "Hi\u{AC00}"
+        );
+        assert_eq!(map.lookup(0xFFFF), None, "noncharacters stay unmapped");
+        assert_eq!(map.lookup(0xE000), None, "private use stays unmapped");
+    }
+
+    #[test]
+    fn later_cmap_writes_win_across_chars_and_ranges() {
+        let cmap = b"1 begincodespacerange <0000> <ffff> endcodespacerange
+2 beginbfchar <0041> <0058> <0050> <0059> endbfchar
+3 beginbfrange
+<0040> <0042> <0061>
+<0042> <0042> [<005A>]
+<0060> <0061> <FFFF>
+endbfrange";
+        let map = parse_to_unicode_cmap(cmap).unwrap();
+        assert_eq!(
+            map.lookup(0x41),
+            Some("b".into()),
+            "range after bfchar wins"
+        );
+        assert_eq!(
+            map.lookup(0x42),
+            Some("Z".into()),
+            "array entry after range wins"
+        );
+        assert_eq!(
+            map.lookup(0x50),
+            Some("Y".into()),
+            "bfchar outside ranges stays"
+        );
+        assert_eq!(map.lookup(0x60), None, "unusable range target maps nothing");
+    }
+
+    #[test]
+    fn overlapping_ranges_keep_write_order() {
+        let cmap = b"1 begincodespacerange <0000> <ffff> endcodespacerange
+2 beginbfrange
+<0010> <0020> <0041>
+<0015> <0016> <0061>
+endbfrange";
+        let map = parse_to_unicode_cmap(cmap).unwrap();
+        assert_eq!(map.lookup(0x10), Some("A".into()));
+        assert_eq!(map.lookup(0x15), Some("a".into()));
+        assert_eq!(map.lookup(0x16), Some("b".into()));
+        assert_eq!(map.lookup(0x17), Some("H".into()));
     }
 }

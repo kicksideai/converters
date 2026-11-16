@@ -441,6 +441,7 @@ dependencies = [
  "bytemuck",
  "hayro",
  "image",
+ "png",
  "wit-bindgen",
 ]
 

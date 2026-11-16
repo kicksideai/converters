@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.17](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.16...pdf2image-v0.7.17) (2026-11-15)
+
+
+### Bug Fixes
+
+* **pdf2image:** render oversized pages within renderer limits ([#39](https://github.com/kicksideai/converters/issues/39)) ([3316d00](https://github.com/kicksideai/converters/commit/3316d00d8ada5e3cb34953954f43d6791e79bca5))
+
+
+### Performance Improvements
+
+* accelerate document conversion on released runtimes ([6ba1dcb](https://github.com/kicksideai/converters/commit/6ba1dcbf72ecc70865941ae7200c41ddbd530dff))
+
 ## [0.7.16](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.15...pdf2image-v0.7.16) (2026-11-12)
 
 

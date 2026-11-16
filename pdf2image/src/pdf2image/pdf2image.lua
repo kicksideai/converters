@@ -30,6 +30,9 @@ local PAGES = "kickside.convert.pdf2image:pages"
 local RENDER = "kickside.convert.pdf2image:render"
 
 local DEFAULT_DPI = 150
+-- Concurrent render calls per multi-page render; matches the render pool max_size.
+local PARALLEL_RENDERS = 4
+local MAX_RENDER_PAGES = 1024
 local MAX_DPI = 600
 local MAX_SCALE = 8
 local MAX_INPUT_BYTES = 128 * 1024 * 1024
@@ -295,9 +298,85 @@ local function new(runtime: Runtime?): any
                 message = PREFIX .. "unexpected page count result", details = {code = "internal"}}) :: error)
         end
 
+        -- Appends the images of one render result to `images`.
+        local function collect_images(images: { string }, res: any): error?
+            if type(res) ~= "table" then
+                return (errors.new({kind = errors.INTERNAL, retryable = true,
+                message = PREFIX .. "converter returned no result", details = {code = "internal"}}) :: error)
+            end
+
+            if res.err ~= nil then
+                local message = (type(res.err) == "table" and tostring(res.err.message)) or tostring(res.err)
+                return (errors.new({kind = errors.INTERNAL, retryable = false,
+                message = message, details = {code = "render_failed"}}) :: error)
+            end
+
+            local rendered = res.ok
+            if type(rendered) ~= "table" then
+                return (errors.new({kind = errors.INTERNAL, retryable = true,
+                message = PREFIX .. "unexpected render result", details = {code = "internal"}}) :: error)
+            end
+
+            for i = 1, #rendered do
+                local item = rendered[i]
+                if type(item) ~= "string" then
+                    return (errors.new({kind = errors.INTERNAL, retryable = true,
+                message = PREFIX .. "unexpected render result", details = {code = "internal"}}) :: error)
+                end
+
+                images[#images + 1] = item
+            end
+
+            return nil
+        end
+
+        -- Splits a multi-page render into contiguous chunks that run as concurrent
+        -- calls, so the render pool renders them on several instances at once.
+        local function render_parallel(zero_based_pages: { number }, options: any): (any, error?)
+            local total = #zero_based_pages
+            local chunk_size = math.ceil(total / math.min(PARALLEL_RENDERS, total))
+            local futures = {}
+            for first = 1, total, chunk_size do
+                local chunk = {}
+                for i = first, math.min(first + chunk_size - 1, total) do
+                    chunk[#chunk + 1] = zero_based_pages[i]
+                end
+                local future, start_err = funcs.async(RENDER, blob, chunk, options)
+                if start_err ~= nil then
+                    return nil, start_err
+                end
+                futures[#futures + 1] = future
+            end
+
+            local images = {}
+            for _, future in ipairs(futures) do
+                future:response():receive()
+                local payload, call_err = future:result()
+                if call_err ~= nil then
+                    return nil, call_err
+                end
+                local collect_err = collect_images(images, payload ~= nil and payload:data() or nil)
+                if collect_err ~= nil then
+                    return nil, collect_err
+                end
+            end
+
+            return images, nil
+        end
+
         local function render_pages(zero_based_pages: { number }, options: any): (any, error?)
+            if #zero_based_pages > MAX_RENDER_PAGES then
+                return nil, (errors.new({kind = errors.INTERNAL, retryable = false,
+                    message = "requested " .. tostring(#zero_based_pages) .. " pages exceeds the limit of " .. tostring(MAX_RENDER_PAGES),
+                    details = {code = "render_failed"}}) :: error)
+            end
+
             if #zero_based_pages == 0 then
                 return {}, nil
+            end
+
+            if #zero_based_pages > 1 and funcs.async ~= nil then
+                return render_parallel(zero_based_pages, options)
             end
 
             local res, call_err = funcs.call(RENDER, blob, zero_based_pages, options)
@@ -305,32 +384,10 @@ local function new(runtime: Runtime?): any
                 return nil, call_err
             end
 
-            if type(res) ~= "table" then
-                return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
-                message = PREFIX .. "converter returned no result", details = {code = "internal"}}) :: error)
-            end
-
-            if res.err ~= nil then
-                local message = (type(res.err) == "table" and tostring(res.err.message)) or tostring(res.err)
-                return nil, (errors.new({kind = errors.INTERNAL, retryable = false,
-                message = message, details = {code = "render_failed"}}) :: error)
-            end
-
-            local rendered = res.ok
-            if type(rendered) ~= "table" then
-                return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
-                message = PREFIX .. "unexpected render result", details = {code = "internal"}}) :: error)
-            end
-
             local images = {}
-            for i = 1, #rendered do
-                local item = rendered[i]
-                if type(item) ~= "string" then
-                    return nil, (errors.new({kind = errors.INTERNAL, retryable = true,
-                message = PREFIX .. "unexpected render result", details = {code = "internal"}}) :: error)
-                end
-
-                images[i] = item
+            local collect_err = collect_images(images, res)
+            if collect_err ~= nil then
+                return nil, collect_err
             end
 
             return images, nil

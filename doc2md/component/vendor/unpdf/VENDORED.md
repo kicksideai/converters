@@ -188,12 +188,31 @@ regression asserts that repeated ToUnicode, embedded cmap, and encoding lookups
 return the same cached value. Component tests convert and scan a generated
 document whose font maps 60,000 two-byte codes across 10,000 text runs.
 
-### 10. Painted Image Counts Without Extraction (`src/parser/options.rs`, `src/parser/stream.rs`, `src/parser/pdf_parser.rs`, `src/parser/backend.rs`)
+### 10. ToUnicode Ranges Without Expansion (`src/parser/font.rs`)
 
-`Page::image_resource_count` came only from resource extraction, which decodes
-every painted image. `ParseOptions::with_image_counts` sets the count without
-extracting resources. `PdfBackend::page_paint_count` runs the painted-content
-walk of patch 7 and skips building `RawXObject`s, so a page's paint count is
-identical to `page_xobjects` while no image sample is decoded. A backend
-regression covers repeated placements, Form, inline-image, and pattern paints
-and asserts zero image decodes.
+Upstream `parse_to_unicode_cmap` expanded every simple-form `bfrange` entry into
+one `String` per character code. An identity CMap that covers the BMP in 256
+ranges, as the html2pdf component writes for each font, then became 65,536
+strings and hash insertions per font.
+
+`ToUnicodeMap` keeps simple-form ranges as sorted, disjoint `(lo, hi, dst)`
+entries and computes the character when it decodes a code, with the same
+noncharacter and private-use filter as before. The last `bfchar`/`bfrange` write
+still wins: a range that a later array entry overrides gives way to the
+`mappings` entry, and overlapping ranges are expanded in write order. Tests cover
+an identity BMP CMap, the write order across `bfchar`, ranges, and array entries,
+and overlapping ranges.
+
+### 11. Image Counts Without Decoding (`src/parser/options.rs`, `src/parser/stream.rs`, `src/parser/backend.rs`, `src/parser/pdf_parser.rs`)
+
+Counting the images a page paints required `with_resources(true)`, which
+decompresses and decodes every image. `ParseOptions::with_resource_counts(true)`
+walks the same painted XObjects and inline images for
+`Page::image_resource_count` but decodes none of them (`PdfBackend::page_paint_count`).
+`extract_resources` takes precedence when both are set.
+
+### 12. Page Image Metadata (`src/model/resource.rs`, `src/parser/pdf_parser.rs`)
+
+Each extracted image was stored twice: in the document resources and as a full
+copy in `Page::images`. `Page::images` now holds `Resource::without_data`, the
+same metadata without the bytes, which stay in the document resources.

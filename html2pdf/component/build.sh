@@ -14,6 +14,7 @@ cd /work/component
 if [ ! -d third_party/libharu ]; then
     git clone --depth 1 --branch "${LIBHARU_TAG}" https://github.com/libharu/libharu.git third_party/libharu
     git -C third_party/libharu apply /work/component/patches/libharu-tounicode-cmap.patch
+    git -C third_party/libharu apply /work/component/patches/libharu-cid-font-tables.patch
 fi
 
 if [ ! -d third_party/litehtml ]; then
@@ -52,9 +53,9 @@ GUMBO_A=$(find build/litehtml -name 'libgumbo.a' | head -1)
 
 echo "=== compile + link component ==="
 rm -rf build/obj && mkdir -p build/obj
-"${WASIP2CC}" -Os -I gen -c gen/html2pdf.c -o build/obj/bindings.o
-"${WASIP2CC}" -Os -std=c23 --embed-dir=. -c src/fonts.c -o build/obj/fonts.o
-"${WASIP2CXX}" -Os ${NOEXC} -std=c++17 -Wl,--no-entry \
+"${WASIP2CC}" -O3 -I gen -c gen/html2pdf.c -o build/obj/bindings.o
+"${WASIP2CC}" -O3 -std=c23 --embed-dir=. -c src/fonts.c -o build/obj/fonts.o
+"${WASIP2CXX}" -O3 ${NOEXC} -std=c++17 -Wl,--no-entry \
     -I gen -I src -I "${HPDF_INC_SRC}" -I "${HPDF_INC_GEN}" \
     -I third_party/litehtml/include -I third_party/litehtml/include/litehtml \
     src/render.cpp src/pdf_container.cpp \

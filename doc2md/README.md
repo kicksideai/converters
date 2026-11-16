@@ -24,8 +24,8 @@ The package contains a WebAssembly component and a Lua SDK. Calls return
 
 ## Requirements
 
-Wippy 0.3.x; repository validation uses 0.3.47a. Use current Hub dependencies
-for the contracts declared by the module.
+Wippy 0.3.x. Use current Hub
+dependencies for the contracts declared by the module.
 The converter has no SQL persistence; SQLite and PostgreSQL are host choices.
 To rebuild WASM, install Rust with `wasm32-wasip2`. Make and Python 3 support build and staging.
 

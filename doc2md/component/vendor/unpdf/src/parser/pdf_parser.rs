@@ -243,14 +243,15 @@ pub(crate) fn parse_single_page(
                             *bw = resource.width.map(|w| w as f32);
                             *bh = resource.height.map(|h| h as f32);
                         }
-                        let image = resource.clone();
+                        // The document keeps the data in `resources`; the page keeps metadata.
+                        let image = resource.without_data();
                         page.add_block(img_block);
                         page.images.push((id, image));
                     }
                 }
             }
         }
-    } else if options.count_images && options.extract_mode != ExtractMode::StructureOnly {
+    } else if options.count_resources && options.extract_mode != ExtractMode::StructureOnly {
         if let Some(page_id) = backend.pages().get(&page_num) {
             page.image_resource_count = backend.page_paint_count(*page_id)?;
         }
@@ -572,7 +573,7 @@ mod tests {
             }
             fn page_xobjects(&self, _: PageId) -> Result<super::super::backend::RawPageXObjects> {
                 self.0.fetch_add(1, Ordering::Relaxed);
-                Ok(super::super::backend::RawPageXObjects { paint_count: 4, objects: [
+                Ok(super::super::backend::RawPageXObjects { paint_count: 4, count_only: false, objects: [
                     ("raw", "Image", None, 4),
                     ("photo", "Image", Some("DCTDecode"), 200),
                     ("small", "Image", Some("DCTDecode"), 4),

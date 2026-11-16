@@ -21,7 +21,7 @@ entries:
       comment: Rust WebAssembly component that sniffs document format and renders Markdown.
     fs: kickside.convert.doc2md:assets
     path: doc2md.wasm
-    hash: sha256:5d3818a5cc460b2cab3a9568dcab7856ad274f108a47cef3ac29d3161d5c016c
+    hash: sha256:6fb582fc01f7d0840678ce8676132878bc25c0a30fd1fe895376af80d1e1aa14
     method: convert
     imports:
       - wasi:io
@@ -39,7 +39,7 @@ entries:
       comment: Rust WebAssembly component method returning one entry per page with its extracted-text length and image-resource count, so a caller can OCR only the scanned pages.
     fs: kickside.convert.doc2md:assets
     path: doc2md.wasm
-    hash: sha256:5d3818a5cc460b2cab3a9568dcab7856ad274f108a47cef3ac29d3161d5c016c
+    hash: sha256:6fb582fc01f7d0840678ce8676132878bc25c0a30fd1fe895376af80d1e1aa14
     method: page-resources
     imports:
       - wasi:io
