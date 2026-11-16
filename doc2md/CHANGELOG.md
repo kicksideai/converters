@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.26](https://github.com/kicksideai/converters/compare/doc2md-v0.8.25...doc2md-v0.8.26) (2026-11-16)
+
+
+### Bug Fixes
+
+* **doc2md:** count page images without decoding them in page_resources ([#37](https://github.com/kicksideai/converters/issues/37)) ([9a41697](https://github.com/kicksideai/converters/commit/9a41697356bee7a640b43c09184775306e47e9c3))
+
 ## [0.8.25](https://github.com/kicksideai/converters/compare/doc2md-v0.8.24...doc2md-v0.8.25) (2026-11-15)
 
 
