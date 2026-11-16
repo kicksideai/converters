@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.11](https://github.com/kicksideai/converters/compare/html2pdf-v0.6.10...html2pdf-v0.6.11) (2026-11-16)
+
+
+### Bug Fixes
+
+* declare WASM limits at options.limits ([#46](https://github.com/kicksideai/converters/issues/46)) ([c4dc65b](https://github.com/kicksideai/converters/commit/c4dc65b1c1d1e8821716efbfd47a21f3144a1d70))
+
 ## [0.6.10](https://github.com/kicksideai/converters/compare/html2pdf-v0.6.9...html2pdf-v0.6.10) (2026-11-16)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.19](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.18...pdf2image-v0.7.19) (2026-11-16)
+
+
+### Bug Fixes
+
+* declare WASM limits at options.limits ([#46](https://github.com/kicksideai/converters/issues/46)) ([c4dc65b](https://github.com/kicksideai/converters/commit/c4dc65b1c1d1e8821716efbfd47a21f3144a1d70))
+
 ## [0.7.18](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.17...pdf2image-v0.7.18) (2026-11-16)
 
 
