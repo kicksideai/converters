@@ -337,7 +337,7 @@ fn render_pages<'a>(
     let fonts = font_settings();
     let mut rendered = Vec::with_capacity(selection.len());
     let max_dimension = match settings.format {
-        Format::Jpeg => MAX_JPEG_DIMENSION,
+        Format::Jpeg => MAX_OUTPUT_DIMENSION.min(MAX_JPEG_DIMENSION),
         _ => MAX_OUTPUT_DIMENSION,
     };
 
