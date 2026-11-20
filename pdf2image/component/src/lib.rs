@@ -38,6 +38,8 @@ const MAX_OUTPUT_PIXELS: u64 = 64 * 1024 * 1024;
 const RENDER_TILE_WIDTH: u16 = 4;
 const MAX_OUTPUT_DIMENSION: f32 =
     ((u16::MAX / RENDER_TILE_WIDTH - 1) * RENDER_TILE_WIDTH - 1) as f32;
+// libjpeg-turbo, including Chromium's decoder, rejects larger JPEG dimensions.
+const MAX_JPEG_DIMENSION: f32 = 65_500.0;
 // Maximum pages rendered per request.
 const MAX_RENDER_PAGES: usize = 1024;
 const WHITE: AlphaColor<Srgb> = AlphaColor::from_rgba8(255, 255, 255, 255);
@@ -75,18 +77,25 @@ fn resolve_scale(scaling: &ScalingOptions) -> f32 {
 // Rendered pixel count for a `page_w` x `page_h` (points) page at `scale`; returns
 // an error for non-finite, degenerate, or over-budget dimensions. saturating_mul
 // bounds the multiply.
+#[cfg(test)]
 fn output_pixels(page_w: f32, page_h: f32, scale: f32) -> Result<u64, RenderError> {
-    checked_pixels(page_w, page_h, scale).map_err(|message| fail(ERR_RANGE, message))
+    checked_pixels(page_w, page_h, scale, MAX_OUTPUT_DIMENSION)
+        .map_err(|message| fail(ERR_RANGE, message))
 }
 
-fn checked_pixels(page_w: f32, page_h: f32, scale: f32) -> Result<u64, &'static str> {
+fn checked_pixels(
+    page_w: f32,
+    page_h: f32,
+    scale: f32,
+    max_dimension: f32,
+) -> Result<u64, &'static str> {
     let out_w = (page_w * scale).floor();
     let out_h = (page_h * scale).floor();
     if !out_w.is_finite() || !out_h.is_finite() || out_w < 1.0 || out_h < 1.0 {
         return Err("invalid render dimensions");
     }
-    if out_w > MAX_OUTPUT_DIMENSION || out_h > MAX_OUTPUT_DIMENSION {
-        return Err("render dimensions exceed the renderer limit");
+    if out_w > max_dimension || out_h > max_dimension {
+        return Err("render dimensions exceed the output dimension limit");
     }
     let pixels = (out_w as u64).saturating_mul(out_h as u64);
     if pixels > MAX_OUTPUT_PIXELS {
@@ -96,13 +105,18 @@ fn checked_pixels(page_w: f32, page_h: f32, scale: f32) -> Result<u64, &'static 
 }
 
 // Scale for a `page_w` x `page_h` (points) page: the requested scale, lowered to
-// a uniform fit within the pixel and renderer dimension limits. Integer output
+// a uniform fit within the pixel and output dimension limits. Integer output
 // dimensions determine whether the requested scale already fits.
-fn page_scale(page_w: f32, page_h: f32, requested: f32) -> Result<f32, RenderError> {
+fn page_scale(
+    page_w: f32,
+    page_h: f32,
+    requested: f32,
+    max_dimension: f32,
+) -> Result<f32, RenderError> {
     if !page_w.is_finite() || !page_h.is_finite() || page_w <= 0.0 || page_h <= 0.0 {
         return Err(fail(ERR_RANGE, "invalid page dimensions"));
     }
-    if checked_pixels(page_w, page_h, requested).is_ok() {
+    if checked_pixels(page_w, page_h, requested, max_dimension).is_ok() {
         return Ok(requested);
     }
     let width = f64::from(page_w);
@@ -116,9 +130,11 @@ fn page_scale(page_w: f32, page_h: f32, requested: f32) -> Result<f32, RenderErr
     // products, so rounding down here can unnecessarily lose a whole pixel.
     let scale = requested
         .min(fit_scale)
-        .min(MAX_OUTPUT_DIMENSION / page_w)
-        .min(MAX_OUTPUT_DIMENSION / page_h);
-    output_pixels(page_w, page_h, scale).map(|_| scale)
+        .min(max_dimension / page_w)
+        .min(max_dimension / page_h);
+    checked_pixels(page_w, page_h, scale, max_dimension)
+        .map(|_| scale)
+        .map_err(|message| fail(ERR_RANGE, message))
 }
 
 fn parse_hex_pair(bytes: &[u8], index: usize) -> Result<u8, RenderError> {
@@ -320,6 +336,10 @@ fn render_pages<'a>(
 
     let fonts = font_settings();
     let mut rendered = Vec::with_capacity(selection.len());
+    let max_dimension = match settings.format {
+        Format::Jpeg => MAX_OUTPUT_DIMENSION.min(MAX_JPEG_DIMENSION),
+        _ => MAX_OUTPUT_DIMENSION,
+    };
 
     for page in selection {
         if page >= count {
@@ -335,7 +355,7 @@ fn render_pages<'a>(
 
         // hayro sizes the pixmap as page.render_dimensions() * scale.
         let (page_w, page_h) = target.render_dimensions();
-        let scale = page_scale(page_w, page_h, settings.scale)
+        let scale = page_scale(page_w, page_h, settings.scale, max_dimension)
             .map_err(|e| fail(e.code, format!("page {page}: {}", e.message)))?;
 
         let render_settings = RenderSettings {
@@ -783,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn panoramic_pages_preserve_full_content_and_aspect() {
+    fn panoramic_jpegs_preserve_full_content_and_aspect() {
         let (send, receive) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for (width, height) in [(14_400, 144), (144, 14_400), (65_527, 144), (65_531, 144)] {
@@ -810,7 +830,7 @@ mod tests {
                     img.width(),
                     img.height()
                 );
-                assert_eq!(img.width().max(img.height()), 65_527);
+                assert_eq!(img.width().max(img.height()), 65_500);
                 assert!(u64::from(img.width()) * u64::from(img.height()) <= MAX_OUTPUT_PIXELS);
                 for (x, y, light) in [(1, 1, false), (99, 1, true), (1, 99, true), (99, 99, false)]
                 {
@@ -834,19 +854,37 @@ mod tests {
     #[test]
     fn page_scale_fits_renderer_tile_boundary() {
         for (width, height) in [(65_527.0, 9.0), (9.0, 65_527.0)] {
-            assert_eq!(page_scale(width, height, 1.0).unwrap(), 1.0);
+            assert_eq!(
+                page_scale(width, height, 1.0, MAX_OUTPUT_DIMENSION).unwrap(),
+                1.0
+            );
         }
         for (width, height) in [(65_531.0, 9.0), (9.0, 65_531.0)] {
-            let scale = page_scale(width, height, 1.0).unwrap();
+            let scale = page_scale(width, height, 1.0, MAX_OUTPUT_DIMENSION).unwrap();
             assert!(scale < 1.0);
             assert_eq!((width.max(height) * scale).floor() as u32, 65_527);
         }
     }
 
     #[test]
+    fn page_scale_fits_browser_jpeg_boundary() {
+        for (width, height) in [(65_500.0, 144.0), (144.0, 65_500.0)] {
+            assert_eq!(
+                page_scale(width, height, 1.0, MAX_JPEG_DIMENSION).unwrap(),
+                1.0
+            );
+        }
+        for (width, height) in [(65_501.0, 144.0), (144.0, 65_501.0)] {
+            let scale = page_scale(width, height, 1.0, MAX_JPEG_DIMENSION).unwrap();
+            assert!(scale < 1.0);
+            assert_eq!((width.max(height) * scale).floor() as u32, 65_500);
+        }
+    }
+
+    #[test]
     fn page_scale_keeps_in_budget_integer_dimensions() {
         for (width, height) in [(8192.9, 8192.1), (8192.1, 8192.9)] {
-            let scale = page_scale(width, height, 1.0).unwrap();
+            let scale = page_scale(width, height, 1.0, MAX_OUTPUT_DIMENSION).unwrap();
             assert_eq!(scale, 1.0);
             assert_eq!((width * scale).floor() as u32, 8192);
             assert_eq!((height * scale).floor() as u32, 8192);
@@ -869,7 +907,10 @@ mod tests {
     #[test]
     fn page_scale_keeps_requested_scale_within_the_limit() {
         let scale = DEFAULT_DPI / PDF_POINTS_PER_INCH;
-        assert_eq!(page_scale(612.0, 792.0, scale).unwrap(), scale);
+        assert_eq!(
+            page_scale(612.0, 792.0, scale, MAX_OUTPUT_DIMENSION).unwrap(),
+            scale
+        );
     }
 
     #[test]
@@ -881,7 +922,7 @@ mod tests {
             (200_000.0, 200_000.0, 1.0),
             (8192.0, 8192.0, 1.0),
         ] {
-            let scale = page_scale(w, h, requested).unwrap();
+            let scale = page_scale(w, h, requested, MAX_OUTPUT_DIMENSION).unwrap();
             assert!(scale <= requested);
             let pixels = output_pixels(w, h, scale).unwrap();
             assert!(
@@ -900,7 +941,12 @@ mod tests {
             (-100.0, 100.0),
             (f32::INFINITY, 100.0),
         ] {
-            assert_eq!(page_scale(w, h, 1.0).unwrap_err().code, ERR_RANGE);
+            assert_eq!(
+                page_scale(w, h, 1.0, MAX_OUTPUT_DIMENSION)
+                    .unwrap_err()
+                    .code,
+                ERR_RANGE
+            );
         }
     }
 
