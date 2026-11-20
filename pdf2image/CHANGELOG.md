@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.20](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.19...pdf2image-v0.7.20) (2026-11-20)
+
+
+### Bug Fixes
+
+* **pdf2image:** keep rendered JPEGs within the browser dimension limit ([#51](https://github.com/kicksideai/converters/issues/51)) ([0e2a184](https://github.com/kicksideai/converters/commit/0e2a18400f93b2dfc3376357c93a8d89bdc710ea))
+
 ## [0.7.19](https://github.com/kicksideai/converters/compare/pdf2image-v0.7.18...pdf2image-v0.7.19) (2026-11-16)
 
 
